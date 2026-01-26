@@ -1,0 +1,11 @@
+# Azure Functions dependencies
+azure-functions==1.17.0
+azure-functions-durable==1.2.4
+
+# Azure SDK
+azure-identity==1.15.0
+azure-storage-file-share==12.15.0
+azure-monitor-ingestion==1.0.3
+
+# Utilities
+python-dateutil==2.8.2

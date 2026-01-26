@@ -1,0 +1,19 @@
+{
+  "IsEncrypted": false,
+  "Values": {
+    "AzureWebJobsStorage": "UseDevelopmentStorage=true",
+    "FUNCTIONS_WORKER_RUNTIME": "python",
+    
+    "STORAGE_ACCOUNT_NAME": "<your-storage-account-name>",
+    "STORAGE_ACCOUNT_KEY": "<your-storage-account-key>",
+    
+    "LOG_ANALYTICS_DCE_ENDPOINT": "<your-dce-endpoint>",
+    "LOG_ANALYTICS_DCR_IMMUTABLE_ID": "<your-dcr-immutable-id>",
+    "LOG_ANALYTICS_STREAM_NAME": "Custom-FileInventory_CL",
+    
+    "BATCH_SIZE": "500",
+    "MAX_FILE_SIZE_FOR_HASH_MB": "100",
+    "SKIP_HASH_COMPUTATION": "true",
+    "EXCLUDE_PATTERNS": "*.tmp,~$*,.DS_Store,Thumbs.db"
+  }
+}

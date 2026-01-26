@@ -9,6 +9,7 @@ An Azure Automation runbook that performs comprehensive inventory scanning of Az
 ## 📋 Table of Contents
 
 - [Overview](#overview)
+- [Implementation Options](#implementation-options)
 - [Features](#features)
 - [Architecture](#architecture)
 - [Prerequisites](#prerequisites)
@@ -16,6 +17,7 @@ An Azure Automation runbook that performs comprehensive inventory scanning of Az
 - [Detailed Setup Guide](#detailed-setup-guide)
 - [Configuration](#configuration)
 - [Usage](#usage)
+- [Durable Functions (Large Scale)](#durable-functions-large-scale)
 - [Sample Queries](#sample-queries)
 - [Troubleshooting](#troubleshooting)
 - [Contributing](#contributing)
@@ -28,6 +30,31 @@ The Azure File Storage Inventory Scanner is designed to scan Azure File Shares o
 - **Analyze storage usage** by file type, age, and size
 - **Identify duplicate files** using MD5 hash comparison
 - **Track file lifecycle** and identify stale data
+- **Generate reports** for compliance and governance
+- **Optimize storage costs** by identifying opportunities to archive or delete old files
+
+## Implementation Options
+
+This repository provides **two implementation options** depending on your scale and requirements:
+
+| Option | Best For | Max Runtime | Complexity |
+|--------|----------|-------------|------------|
+| **[Azure Automation Runbook](Runbooks/)** | Small-medium shares (< 2TB) | 3 hours | Low |
+| **[Azure Durable Functions](DurableFunctions/)** | Large shares (2TB+) | Unlimited | Medium |
+
+### When to Use Each Option
+
+**Use Azure Automation Runbook when:**
+- File shares are under 2TB
+- You want simple setup and management
+- Scans complete within 3 hours
+- You prefer PowerShell
+
+**Use Azure Durable Functions when:**
+- File shares exceed 2TB
+- You need parallel processing for faster scans
+- Scans may exceed 3 hours
+- You need automatic checkpointing and resume capability
 - **Generate reports** for compliance and governance
 - **Optimize storage costs** by identifying opportunities to archive or delete old files
 
@@ -482,13 +509,70 @@ FileInventory_CL
 az role assignment list --assignee <principal-id> --output table
 ```
 
+## Durable Functions (Large Scale)
+
+For file shares larger than 2TB or when scans exceed 3 hours, use the **Azure Durable Functions** implementation.
+
+### Key Benefits
+
+| Feature | Description |
+|---------|-------------|
+| **No Timeout** | Can run for days if needed |
+| **Parallel Processing** | Scan 10+ directories simultaneously |
+| **Auto-Checkpointing** | Resumes from last checkpoint on failure |
+| **Real-time Status** | API endpoints for progress monitoring |
+| **Cost Effective** | Pay only for actual execution time |
+
+### Quick Start
+
+```bash
+cd DurableFunctions
+
+# Install dependencies
+pip install -r requirements.txt
+
+# Configure (copy template and edit)
+cp local.settings.template.json local.settings.json
+
+# Run locally
+func start
+
+# Start a scan
+curl -X POST http://localhost:7071/api/start-scan \
+  -H "Content-Type: application/json" \
+  -d '{"storageAccountName": "mystorageaccount", "skipHashComputation": true}'
+```
+
+### Deploy to Azure
+
+```powershell
+.\DurableFunctions\Deploy-DurableFunctions.ps1 `
+    -ResourceGroupName "rg-file-inventory" `
+    -Location "eastus" `
+    -FunctionAppName "func-file-inventory" `
+    -StorageAccountName "stfuncinventory"
+```
+
+📖 **Full documentation:** [DurableFunctions/README.md](DurableFunctions/README.md)
+
 ## File Structure
 
 ```
 AzureFileInventoryScanner/
 ├── README.md                           # This file
 ├── Runbooks/
-│   └── AzureFileInventoryScanner.ps1   # Main runbook script
+│   └── AzureFileInventoryScanner.ps1   # Main runbook script (PowerShell)
+├── DurableFunctions/                   # Python Durable Functions (for large shares)
+│   ├── README.md                       # Durable Functions documentation
+│   ├── function_app.py                 # HTTP triggers
+│   ├── requirements.txt                # Python dependencies
+│   ├── host.json                       # Function app configuration
+│   ├── Deploy-DurableFunctions.ps1     # Deployment script
+│   ├── orchestrator_main/              # Main orchestrator
+│   ├── orchestrator_file_share/        # Sub-orchestrator per share
+│   ├── activity_list_file_shares/      # List shares activity
+│   ├── activity_scan_directory/        # Scan directory activity
+│   └── activity_send_to_log_analytics/ # Send to LA activity
 ├── Templates/
 │   ├── file-inventory-table-schema.json    # Log Analytics table schema
 │   └── dcr-template.json               # Data Collection Rule ARM template
