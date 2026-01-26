@@ -1,0 +1,116 @@
+{
+    "properties": {
+        "schema": {
+            "name": "FileInventory_CL",
+            "columns": [
+                {
+                    "name": "TimeGenerated",
+                    "type": "datetime",
+                    "description": "Time when the record was generated (required by Log Analytics)"
+                },
+                {
+                    "name": "StorageAccount",
+                    "type": "string",
+                    "description": "Name of the Azure Storage Account"
+                },
+                {
+                    "name": "FileShare",
+                    "type": "string",
+                    "description": "Name of the Azure File Share"
+                },
+                {
+                    "name": "FilePath",
+                    "type": "string",
+                    "description": "Full path of the file within the share"
+                },
+                {
+                    "name": "FileName",
+                    "type": "string",
+                    "description": "Name of the file"
+                },
+                {
+                    "name": "FileExtension",
+                    "type": "string",
+                    "description": "File extension (e.g., .pdf, .docx)"
+                },
+                {
+                    "name": "FileSizeBytes",
+                    "type": "long",
+                    "description": "File size in bytes"
+                },
+                {
+                    "name": "FileSizeMB",
+                    "type": "real",
+                    "description": "File size in megabytes"
+                },
+                {
+                    "name": "FileSizeGB",
+                    "type": "real",
+                    "description": "File size in gigabytes"
+                },
+                {
+                    "name": "LastModified",
+                    "type": "datetime",
+                    "description": "Last modified date/time of the file"
+                },
+                {
+                    "name": "Created",
+                    "type": "datetime",
+                    "description": "Creation date/time of the file"
+                },
+                {
+                    "name": "AgeInDays",
+                    "type": "int",
+                    "description": "Age of the file in days since last modified"
+                },
+                {
+                    "name": "FileHash",
+                    "type": "string",
+                    "description": "MD5 hash of the file content (or SKIPPED/ERROR)"
+                },
+                {
+                    "name": "IsDuplicate",
+                    "type": "string",
+                    "description": "Whether file is a duplicate (Unknown by default)"
+                },
+                {
+                    "name": "DuplicateCount",
+                    "type": "int",
+                    "description": "Number of duplicates found"
+                },
+                {
+                    "name": "DuplicateGroupId",
+                    "type": "string",
+                    "description": "Group identifier for duplicate files"
+                },
+                {
+                    "name": "FileCategory",
+                    "type": "string",
+                    "description": "Category of file (Documents, Images, Videos, etc.)"
+                },
+                {
+                    "name": "AgeBucket",
+                    "type": "string",
+                    "description": "Age bucket (0-7 days, 8-30 days, etc.)"
+                },
+                {
+                    "name": "SizeBucket",
+                    "type": "string",
+                    "description": "Size bucket (< 1 KB, 1 KB - 1 MB, etc.)"
+                },
+                {
+                    "name": "ScanTimestamp",
+                    "type": "string",
+                    "description": "Timestamp when the file was scanned"
+                },
+                {
+                    "name": "ExecutionId",
+                    "type": "string",
+                    "description": "Unique identifier for the scan execution"
+                }
+            ]
+        },
+        "retentionInDays": 90,
+        "totalRetentionInDays": 365
+    }
+}

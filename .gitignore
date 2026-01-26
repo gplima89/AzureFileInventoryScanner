@@ -1,0 +1,85 @@
+# Azure File Inventory Scanner - .gitignore
+
+# PowerShell
+*.ps1xml
+
+# IDE / Editor
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+.idea/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+.Spotlight-V100
+.Trashes
+
+# Linux
+*~
+.fuse_hidden*
+.directory
+.Trash-*
+.nfs*
+
+# Logs
+*.log
+logs/
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+*.swp
+*~
+
+# Local development
+.env
+.env.local
+.env.*.local
+local.settings.json
+
+# Azure
+*.publishsettings
+
+# Secrets (never commit these!)
+secrets/
+credentials/
+*.pfx
+*.cer
+*.pem
+*.key
+
+# Output directories
+output/
+results/
+exports/
+
+# Test files
+test-output/
+TestResults/
+
+# Backup files
+backup/
+*.backup
+
+# Package files (if any npm/pip packages are added later)
+node_modules/
+__pycache__/
+*.pyc
+.Python
+pip-log.txt

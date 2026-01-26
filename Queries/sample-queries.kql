@@ -1,0 +1,529 @@
+// ============================================================================
+// Azure File Storage Inventory Scanner - Sample KQL Queries
+// ============================================================================
+// These queries work with the FileInventory_CL custom table created by the
+// Azure File Storage Inventory Scanner runbook.
+// ============================================================================
+
+// ----------------------------------------------------------------------------
+// SECTION 1: OVERVIEW & DASHBOARD QUERIES
+// ----------------------------------------------------------------------------
+
+// 1.1 - Storage Overview by Account and Share
+FileInventory_CL
+| where TimeGenerated > ago(24h)
+| summarize 
+    TotalFiles = count(),
+    TotalSizeGB = round(sum(FileSizeGB), 2),
+    AvgFileSizeMB = round(avg(FileSizeMB), 2),
+    OldestFile = min(LastModified),
+    NewestFile = max(LastModified)
+    by StorageAccount, FileShare
+| order by TotalSizeGB desc
+
+
+// 1.2 - Overall Storage Summary
+FileInventory_CL
+| where TimeGenerated > ago(24h)
+| summarize 
+    TotalFiles = count(),
+    TotalStorageTB = round(sum(FileSizeGB) / 1024, 3),
+    UniqueStorageAccounts = dcount(StorageAccount),
+    UniqueFileShares = dcount(strcat(StorageAccount, "/", FileShare)),
+    AvgFileAgeInDays = round(avg(AgeInDays), 0),
+    OldestFileAge = max(AgeInDays)
+
+
+// 1.3 - Scan Execution History
+FileInventory_CL
+| where TimeGenerated > ago(7d)
+| summarize 
+    FilesScanned = count(),
+    SizeScannedGB = round(sum(FileSizeGB), 2),
+    FirstRecord = min(TimeGenerated),
+    LastRecord = max(TimeGenerated)
+    by ExecutionId
+| order by FirstRecord desc
+
+
+// ----------------------------------------------------------------------------
+// SECTION 2: FILE SIZE ANALYSIS
+// ----------------------------------------------------------------------------
+
+// 2.1 - Find Largest Files (Top 100)
+FileInventory_CL
+| where TimeGenerated > ago(24h)
+| project StorageAccount, FileShare, FilePath, FileName, FileSizeGB, FileSizeMB, LastModified, AgeInDays, FileCategory
+| order by FileSizeGB desc
+| take 100
+
+
+// 2.2 - Files Larger Than 1 GB
+FileInventory_CL
+| where TimeGenerated > ago(24h)
+| where FileSizeGB >= 1
+| summarize 
+    Count = count(),
+    TotalSizeGB = round(sum(FileSizeGB), 2)
+    by StorageAccount, FileShare
+| order by TotalSizeGB desc
+
+
+// 2.3 - Storage Distribution by Size Bucket
+FileInventory_CL
+| where TimeGenerated > ago(24h)
+| summarize 
+    FileCount = count(),
+    TotalSizeGB = round(sum(FileSizeGB), 2),
+    Percentage = round(count() * 100.0 / toscalar(FileInventory_CL | where TimeGenerated > ago(24h) | count()), 2)
+    by SizeBucket
+| order by case(
+    SizeBucket, "< 1 KB", 1,
+    SizeBucket, "1 KB - 1 MB", 2,
+    SizeBucket, "1 MB - 10 MB", 3,
+    SizeBucket, "10 MB - 100 MB", 4,
+    SizeBucket, "100 MB - 500 MB", 5,
+    SizeBucket, "500 MB - 1 GB", 6,
+    SizeBucket, "1 GB - 5 GB", 7,
+    SizeBucket, "5 GB - 10 GB", 8,
+    SizeBucket, "10+ GB", 9,
+    10) asc
+
+
+// 2.4 - Size Distribution Chart (for visualization)
+FileInventory_CL
+| where TimeGenerated > ago(24h)
+| summarize TotalSizeGB = sum(FileSizeGB) by SizeBucket
+| render piechart with (title="Storage by Size Bucket")
+
+
+// ----------------------------------------------------------------------------
+// SECTION 3: FILE AGE & LIFECYCLE ANALYSIS
+// ----------------------------------------------------------------------------
+
+// 3.1 - Files by Age Bucket
+FileInventory_CL
+| where TimeGenerated > ago(24h)
+| summarize 
+    FileCount = count(),
+    TotalSizeGB = round(sum(FileSizeGB), 2),
+    AvgSizeMB = round(avg(FileSizeMB), 2)
+    by AgeBucket
+| order by case(
+    AgeBucket, "0-7 days", 1,
+    AgeBucket, "8-30 days", 2,
+    AgeBucket, "31-90 days", 3,
+    AgeBucket, "91-180 days", 4,
+    AgeBucket, "181-365 days", 5,
+    AgeBucket, "1-2 years", 6,
+    AgeBucket, "2-5 years", 7,
+    AgeBucket, "5+ years", 8,
+    9) asc
+
+
+// 3.2 - Stale Files (Not Modified in 2+ Years) - Archive Candidates
+FileInventory_CL
+| where TimeGenerated > ago(24h)
+| where AgeInDays > 730
+| summarize 
+    FileCount = count(),
+    TotalSizeGB = round(sum(FileSizeGB), 2)
+    by StorageAccount, FileShare, FileCategory
+| order by TotalSizeGB desc
+
+
+// 3.3 - Files Not Modified in 5+ Years - Deletion Candidates
+FileInventory_CL
+| where TimeGenerated > ago(24h)
+| where AgeInDays > 1825
+| project StorageAccount, FileShare, FilePath, FileName, FileSizeGB, LastModified, AgeInDays
+| order by AgeInDays desc
+| take 500
+
+
+// 3.4 - Recent Files (Modified in Last 7 Days)
+FileInventory_CL
+| where TimeGenerated > ago(24h)
+| where AgeInDays <= 7
+| summarize 
+    FileCount = count(),
+    TotalSizeGB = round(sum(FileSizeGB), 2)
+    by StorageAccount, FileShare
+| order by FileCount desc
+
+
+// 3.5 - File Age Trend Over Time (comparing multiple scans)
+FileInventory_CL
+| where TimeGenerated > ago(30d)
+| summarize 
+    AvgAgeInDays = round(avg(AgeInDays), 0),
+    StaleFilesCount = countif(AgeInDays > 365)
+    by bin(TimeGenerated, 1d), StorageAccount
+| render timechart with (title="Average File Age Trend")
+
+
+// ----------------------------------------------------------------------------
+// SECTION 4: FILE TYPE ANALYSIS
+// ----------------------------------------------------------------------------
+
+// 4.1 - Storage by File Category
+FileInventory_CL
+| where TimeGenerated > ago(24h)
+| summarize 
+    FileCount = count(),
+    TotalSizeGB = round(sum(FileSizeGB), 2),
+    AvgSizeMB = round(avg(FileSizeMB), 2)
+    by FileCategory
+| order by TotalSizeGB desc
+
+
+// 4.2 - File Category Distribution Chart
+FileInventory_CL
+| where TimeGenerated > ago(24h)
+| summarize TotalSizeGB = sum(FileSizeGB) by FileCategory
+| render piechart with (title="Storage by File Category")
+
+
+// 4.3 - Top File Extensions by Count
+FileInventory_CL
+| where TimeGenerated > ago(24h)
+| summarize 
+    FileCount = count(),
+    TotalSizeGB = round(sum(FileSizeGB), 2),
+    AvgSizeMB = round(avg(FileSizeMB), 2)
+    by FileExtension
+| order by FileCount desc
+| take 20
+
+
+// 4.4 - Top File Extensions by Storage
+FileInventory_CL
+| where TimeGenerated > ago(24h)
+| summarize 
+    FileCount = count(),
+    TotalSizeGB = round(sum(FileSizeGB), 2)
+    by FileExtension
+| order by TotalSizeGB desc
+| take 20
+
+
+// 4.5 - Temporary/Junk Files Analysis
+FileInventory_CL
+| where TimeGenerated > ago(24h)
+| where FileCategory == "Temporary" or FileExtension in (".tmp", ".temp", ".bak", ".swp", "~")
+| summarize 
+    FileCount = count(),
+    TotalSizeGB = round(sum(FileSizeGB), 2)
+    by StorageAccount, FileShare
+| order by TotalSizeGB desc
+
+
+// ----------------------------------------------------------------------------
+// SECTION 5: DUPLICATE FILE DETECTION
+// ----------------------------------------------------------------------------
+
+// 5.1 - Find Duplicate Files (by Hash)
+// Note: Requires hash computation to be enabled during scan
+FileInventory_CL
+| where TimeGenerated > ago(24h)
+| where FileHash !in ("SKIPPED", "SKIPPED_TOO_LARGE", "ERROR", "SKIPPED_PERFORMANCE", "")
+| summarize 
+    DuplicateCount = count(),
+    TotalDuplicateSizeGB = round(sum(FileSizeGB), 2),
+    WastedSpaceGB = round(sum(FileSizeGB) - min(FileSizeGB), 2),
+    Locations = make_list(strcat(StorageAccount, "/", FileShare, "/", FilePath), 10)
+    by FileHash, FileName, FileSizeBytes
+| where DuplicateCount > 1
+| order by WastedSpaceGB desc
+| take 100
+
+
+// 5.2 - Duplicate Files Summary
+FileInventory_CL
+| where TimeGenerated > ago(24h)
+| where FileHash !in ("SKIPPED", "SKIPPED_TOO_LARGE", "ERROR", "SKIPPED_PERFORMANCE", "")
+| summarize Count = count() by FileHash, FileSizeBytes
+| where Count > 1
+| summarize 
+    TotalDuplicateGroups = count(),
+    TotalDuplicateFiles = sum(Count),
+    EstimatedWastedFiles = sum(Count - 1)
+
+
+// 5.3 - Potential Duplicates by Name and Size (when hash not available)
+FileInventory_CL
+| where TimeGenerated > ago(24h)
+| summarize 
+    Count = count(),
+    Locations = make_list(strcat(StorageAccount, "/", FileShare), 5)
+    by FileName, FileSizeBytes
+| where Count > 1
+| order by FileSizeBytes desc
+| take 100
+
+
+// 5.4 - Duplicate Detection Effectiveness Report
+FileInventory_CL
+| where TimeGenerated > ago(24h)
+| summarize 
+    TotalFiles = count(),
+    HashesComputed = countif(FileHash !in ("SKIPPED", "SKIPPED_TOO_LARGE", "ERROR", "SKIPPED_PERFORMANCE", "")),
+    HashesSkipped = countif(FileHash in ("SKIPPED", "SKIPPED_TOO_LARGE", "SKIPPED_PERFORMANCE")),
+    HashErrors = countif(FileHash == "ERROR")
+| extend 
+    HashCoveragePercent = round(HashesComputed * 100.0 / TotalFiles, 2)
+
+
+// ----------------------------------------------------------------------------
+// SECTION 6: FOLDER ANALYSIS
+// ----------------------------------------------------------------------------
+
+// 6.1 - Top-Level Folder Analysis
+FileInventory_CL
+| where TimeGenerated > ago(24h)
+| extend TopFolder = tostring(split(FilePath, "/")[0])
+| where isnotempty(TopFolder)
+| summarize 
+    FileCount = count(),
+    TotalSizeGB = round(sum(FileSizeGB), 2),
+    AvgAgeInDays = round(avg(AgeInDays), 0)
+    by StorageAccount, FileShare, TopFolder
+| order by TotalSizeGB desc
+| take 50
+
+
+// 6.2 - Deep Folder Paths (More than 5 levels deep)
+FileInventory_CL
+| where TimeGenerated > ago(24h)
+| extend FolderDepth = array_length(split(FilePath, "/"))
+| where FolderDepth > 5
+| summarize 
+    FileCount = count(),
+    TotalSizeGB = round(sum(FileSizeGB), 2),
+    MaxDepth = max(FolderDepth)
+    by StorageAccount, FileShare
+| order by MaxDepth desc
+
+
+// 6.3 - Folder Size Heatmap Data
+FileInventory_CL
+| where TimeGenerated > ago(24h)
+| extend TopFolder = tostring(split(FilePath, "/")[0])
+| summarize TotalSizeGB = round(sum(FileSizeGB), 2) by StorageAccount, FileShare, TopFolder
+| where TotalSizeGB > 1
+| order by TotalSizeGB desc
+
+
+// ----------------------------------------------------------------------------
+// SECTION 7: COST OPTIMIZATION OPPORTUNITIES
+// ----------------------------------------------------------------------------
+
+// 7.1 - Archive Tier Candidates (Old + Large files)
+FileInventory_CL
+| where TimeGenerated > ago(24h)
+| where AgeInDays > 365 and FileSizeGB > 0.1
+| summarize 
+    FileCount = count(),
+    TotalSizeGB = round(sum(FileSizeGB), 2),
+    EstimatedMonthlySavingsUSD = round(sum(FileSizeGB) * 0.015, 2) // Rough estimate
+    by StorageAccount, FileShare
+| order by TotalSizeGB desc
+
+
+// 7.2 - Delete Candidates (Very old, small files with no activity)
+FileInventory_CL
+| where TimeGenerated > ago(24h)
+| where AgeInDays > 1095 // 3 years
+| where FileSizeMB < 1
+| summarize 
+    FileCount = count(),
+    TotalSizeGB = round(sum(FileSizeGB), 2)
+    by StorageAccount, FileShare, FileCategory
+| order by FileCount desc
+
+
+// 7.3 - Storage Optimization Summary
+FileInventory_CL
+| where TimeGenerated > ago(24h)
+| summarize 
+    TotalFiles = count(),
+    TotalSizeGB = round(sum(FileSizeGB), 2),
+    
+    // Files that could be archived (>1 year old)
+    ArchiveCandidateFiles = countif(AgeInDays > 365),
+    ArchiveCandidateSizeGB = round(sumif(FileSizeGB, AgeInDays > 365), 2),
+    
+    // Files that could be deleted (>3 years old)
+    DeleteCandidateFiles = countif(AgeInDays > 1095),
+    DeleteCandidateSizeGB = round(sumif(FileSizeGB, AgeInDays > 1095), 2),
+    
+    // Temporary files
+    TempFiles = countif(FileCategory == "Temporary"),
+    TempFilesSizeGB = round(sumif(FileSizeGB, FileCategory == "Temporary"), 2)
+    by StorageAccount
+| extend 
+    ArchiveOpportunityPercent = round(ArchiveCandidateSizeGB * 100.0 / TotalSizeGB, 2),
+    DeleteOpportunityPercent = round(DeleteCandidateSizeGB * 100.0 / TotalSizeGB, 2)
+
+
+// ----------------------------------------------------------------------------
+// SECTION 8: SECURITY & COMPLIANCE
+// ----------------------------------------------------------------------------
+
+// 8.1 - Executable Files Inventory
+FileInventory_CL
+| where TimeGenerated > ago(24h)
+| where FileCategory == "Executables"
+| project StorageAccount, FileShare, FilePath, FileName, FileSizeGB, LastModified, AgeInDays
+| order by LastModified desc
+
+
+// 8.2 - Files Modified Recently (Potential Changes)
+FileInventory_CL
+| where TimeGenerated > ago(24h)
+| where AgeInDays <= 1
+| summarize 
+    RecentlyModifiedCount = count(),
+    TotalSizeGB = round(sum(FileSizeGB), 2)
+    by StorageAccount, FileShare, FileCategory
+| order by RecentlyModifiedCount desc
+
+
+// 8.3 - Database Files Audit
+FileInventory_CL
+| where TimeGenerated > ago(24h)
+| where FileCategory == "Databases"
+| project StorageAccount, FileShare, FilePath, FileName, FileSizeGB, LastModified, AgeInDays
+| order by FileSizeGB desc
+
+
+// 8.4 - Files with Unusual Extensions
+FileInventory_CL
+| where TimeGenerated > ago(24h)
+| where FileExtension !in (
+    ".txt", ".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx",
+    ".jpg", ".jpeg", ".png", ".gif", ".bmp",
+    ".mp4", ".avi", ".mkv", ".mov",
+    ".mp3", ".wav", ".m4a",
+    ".zip", ".rar", ".7z", ".tar", ".gz",
+    ".exe", ".dll", ".msi",
+    ".json", ".xml", ".yaml", ".yml", ".csv",
+    ".ps1", ".py", ".js", ".ts", ".cs", ".java"
+)
+| summarize Count = count() by FileExtension
+| order by Count desc
+| take 30
+
+
+// ----------------------------------------------------------------------------
+// SECTION 9: ALERTS & ANOMALIES
+// ----------------------------------------------------------------------------
+
+// 9.1 - Unusually Large Files (Statistical Outliers)
+let avgSize = toscalar(
+    FileInventory_CL
+    | where TimeGenerated > ago(24h)
+    | summarize avg(FileSizeBytes)
+);
+let stdDev = toscalar(
+    FileInventory_CL
+    | where TimeGenerated > ago(24h)
+    | summarize stdev(FileSizeBytes)
+);
+FileInventory_CL
+| where TimeGenerated > ago(24h)
+| where FileSizeBytes > (avgSize + 3 * stdDev)
+| project StorageAccount, FileShare, FilePath, FileName, FileSizeGB, LastModified
+| order by FileSizeGB desc
+
+
+// 9.2 - Storage Growth Detection (Compare Scans)
+FileInventory_CL
+| where TimeGenerated > ago(30d)
+| summarize TotalSizeGB = sum(FileSizeGB), FileCount = count() by bin(TimeGenerated, 1d)
+| order by TimeGenerated asc
+| serialize
+| extend 
+    PrevSizeGB = prev(TotalSizeGB),
+    GrowthGB = TotalSizeGB - prev(TotalSizeGB),
+    GrowthPercent = round((TotalSizeGB - prev(TotalSizeGB)) * 100.0 / prev(TotalSizeGB), 2)
+| where isnotnull(GrowthGB)
+
+
+// 9.3 - New Files Detection (Files created in last scan)
+FileInventory_CL
+| where TimeGenerated > ago(24h)
+| where Created > ago(7d)
+| summarize 
+    NewFilesCount = count(),
+    NewFilesSizeGB = round(sum(FileSizeGB), 2)
+    by StorageAccount, FileShare, FileCategory
+| order by NewFilesCount desc
+
+
+// ----------------------------------------------------------------------------
+// SECTION 10: REPORTING QUERIES
+// ----------------------------------------------------------------------------
+
+// 10.1 - Executive Summary Report
+FileInventory_CL
+| where TimeGenerated > ago(24h)
+| summarize 
+    TotalFiles = count(),
+    TotalStorageTB = round(sum(FileSizeGB) / 1024, 3),
+    UniqueShares = dcount(strcat(StorageAccount, FileShare)),
+    AvgFileAgeDays = round(avg(AgeInDays), 0),
+    FilesOlderThan1Year = countif(AgeInDays > 365),
+    StorageOlderThan1YearGB = round(sumif(FileSizeGB, AgeInDays > 365), 2),
+    LargeFilesOver1GB = countif(FileSizeGB >= 1),
+    LargeFilesStorageGB = round(sumif(FileSizeGB, FileSizeGB >= 1), 2)
+
+
+// 10.2 - Monthly Scan Comparison
+FileInventory_CL
+| where TimeGenerated > ago(90d)
+| summarize 
+    TotalFiles = count(),
+    TotalSizeGB = round(sum(FileSizeGB), 2),
+    AvgAgeInDays = round(avg(AgeInDays), 0)
+    by format_datetime(TimeGenerated, "yyyy-MM"), StorageAccount
+| order by format_datetime(TimeGenerated, "yyyy-MM") desc
+
+
+// 10.3 - Share-Level Detail Report
+FileInventory_CL
+| where TimeGenerated > ago(24h)
+| summarize 
+    TotalFiles = count(),
+    TotalSizeGB = round(sum(FileSizeGB), 2),
+    AvgSizeMB = round(avg(FileSizeMB), 2),
+    MedianAgeInDays = percentile(AgeInDays, 50),
+    OldestFileDays = max(AgeInDays),
+    NewestFileDays = min(AgeInDays),
+    UniqueExtensions = dcount(FileExtension),
+    TopCategory = arg_max(count(), FileCategory)
+    by StorageAccount, FileShare
+| order by TotalSizeGB desc
+
+
+// 10.4 - Export-Ready Inventory (CSV format)
+FileInventory_CL
+| where TimeGenerated > ago(24h)
+| project 
+    ScanDate = format_datetime(TimeGenerated, "yyyy-MM-dd"),
+    StorageAccount,
+    FileShare,
+    FilePath,
+    FileName,
+    FileExtension,
+    FileSizeBytes,
+    FileSizeMB,
+    FileSizeGB,
+    LastModified = format_datetime(LastModified, "yyyy-MM-dd HH:mm:ss"),
+    Created = format_datetime(Created, "yyyy-MM-dd HH:mm:ss"),
+    AgeInDays,
+    FileCategory,
+    AgeBucket,
+    SizeBucket,
+    FileHash
+| order by StorageAccount, FileShare, FilePath
