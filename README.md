@@ -9,17 +9,17 @@ An Azure Automation runbook that performs comprehensive inventory scanning of Az
 ## 📋 Table of Contents
 
 - [Overview](#overview)
-- [Implementation Options](#implementation-options)
 - [Features](#features)
 - [Architecture](#architecture)
 - [Prerequisites](#prerequisites)
 - [Quick Start](#quick-start)
-- [Detailed Setup Guide](#detailed-setup-guide)
+- [Step-by-Step Implementation Guide](#step-by-step-implementation-guide)
 - [Configuration](#configuration)
 - [Usage](#usage)
-- [Durable Functions (Large Scale)](#durable-functions-large-scale)
+- [Hybrid Runbook Worker (Large Scale)](#hybrid-runbook-worker-large-scale)
 - [Sample Queries](#sample-queries)
 - [Troubleshooting](#troubleshooting)
+- [Validation Script](#validation-script)
 - [Contributing](#contributing)
 - [License](#license)
 
@@ -30,31 +30,6 @@ The Azure File Storage Inventory Scanner is designed to scan Azure File Shares o
 - **Analyze storage usage** by file type, age, and size
 - **Identify duplicate files** using MD5 hash comparison
 - **Track file lifecycle** and identify stale data
-- **Generate reports** for compliance and governance
-- **Optimize storage costs** by identifying opportunities to archive or delete old files
-
-## Implementation Options
-
-This repository provides **two implementation options** depending on your scale and requirements:
-
-| Option | Best For | Max Runtime | Complexity |
-|--------|----------|-------------|------------|
-| **[Azure Automation Runbook](Runbooks/)** | Small-medium shares (< 2TB) | 3 hours | Low |
-| **[Azure Durable Functions](DurableFunctions/)** | Large shares (2TB+) | Unlimited | Medium |
-
-### When to Use Each Option
-
-**Use Azure Automation Runbook when:**
-- File shares are under 2TB
-- You want simple setup and management
-- Scans complete within 3 hours
-- You prefer PowerShell
-
-**Use Azure Durable Functions when:**
-- File shares exceed 2TB
-- You need parallel processing for faster scans
-- Scans may exceed 3 hours
-- You need automatic checkpointing and resume capability
 - **Generate reports** for compliance and governance
 - **Optimize storage costs** by identifying opportunities to archive or delete old files
 
@@ -175,8 +150,8 @@ After deployment, set these variables in your Automation Account:
 |---------------|-------|
 | `FileInventory_LogAnalyticsDceEndpoint` | `https://<dce-name>.<region>.ingest.monitor.azure.com` |
 | `FileInventory_LogAnalyticsDcrImmutableId` | `dcr-xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx` |
-| `FileInventory_LogAnalyticsStreamName` | `Custom-FileInventory_CL` |
-| `FileInventory_LogAnalyticsTableName` | `FileInventory_CL` |
+| `FileInventory_LogAnalyticsStreamName` | `Custom-<TableName>_CL` |
+| `FileInventory_LogAnalyticsTableName` | `<TableName>_CL` |
 
 ### 3. Run the Runbook
 
@@ -192,52 +167,111 @@ Start-AzAutomationRunbook -Name "AzureFileInventoryScanner" `
     }
 ```
 
-## Detailed Setup Guide
+## Step-by-Step Implementation Guide
 
-### Step 1: Create Log Analytics Workspace
+This guide walks you through setting up the Azure File Inventory Scanner from scratch.
+
+### Step 1: Create Resource Group
 
 ```powershell
-# Create resource group
+# Using Azure CLI
 az group create --name rg-file-inventory --location eastus
 
-# Create Log Analytics workspace
+# Or using PowerShell
+New-AzResourceGroup -Name "rg-file-inventory" -Location "eastus"
+```
+
+### Step 2: Create Log Analytics Workspace
+
+```powershell
+# Using Azure CLI
 az monitor log-analytics workspace create \
     --resource-group rg-file-inventory \
     --workspace-name law-file-inventory \
     --retention-time 90
+
+# Or using PowerShell
+New-AzOperationalInsightsWorkspace `
+    -ResourceGroupName "rg-file-inventory" `
+    -Name "law-file-inventory" `
+    -Location "eastus" `
+    -RetentionInDays 90
 ```
 
-### Step 2: Create Custom Table
+### Step 3: Create Custom Log Analytics Table
 
-Use the schema from `Templates/file-inventory-table-schema.json` to create the custom table via Azure Portal or ARM template.
-
-**Via Azure Portal:**
+**Option A: Via Azure Portal**
 1. Navigate to your Log Analytics workspace
-2. Go to **Tables** → **Create** → **New custom log (DCR-based)**
-3. Follow the wizard and use the schema from the template
+2. Go to **Settings** → **Tables** → **Create** → **New custom log (DCR-based)**
+3. Enter table name (e.g., `FileInventory_CL`)
+4. Upload or paste the schema from `Templates/file-inventory-table-schema.json`
 
-### Step 3: Create Data Collection Endpoint & Rule
+**Option B: Via Azure CLI**
+```bash
+# Create the table using REST API
+az rest --method PUT \
+    --url "https://management.azure.com/subscriptions/<Sub-ID>/resourceGroups/rg-file-inventory/providers/Microsoft.OperationalInsights/workspaces/law-file-inventory/tables/FileInventory_CL?api-version=2022-10-01" \
+    --body @Templates/file-inventory-table-schema.json
+```
+
+### Step 4: Create Data Collection Endpoint (DCE)
 
 ```powershell
-# Create DCE
+# Using Azure CLI
 az monitor data-collection endpoint create \
     --name dce-file-inventory \
     --resource-group rg-file-inventory \
     --location eastus \
     --public-network-access Enabled
 
-# Create DCR (use the ARM template in Templates folder)
-az deployment group create \
+# Get the DCE logs ingestion endpoint (save this for later)
+az monitor data-collection endpoint show \
+    --name dce-file-inventory \
     --resource-group rg-file-inventory \
-    --template-file Templates/dcr-template.json \
-    --parameters dcrName=dcr-file-inventory \
-                 workspaceResourceId=/subscriptions/{sub}/resourceGroups/rg-file-inventory/providers/Microsoft.OperationalInsights/workspaces/law-file-inventory
+    --query logsIngestion.endpoint -o tsv
 ```
 
-### Step 4: Create Automation Account
+### Step 5: Create Data Collection Rule (DCR)
+
+> ⚠️ **CRITICAL**: The DCR `transformKql` must explicitly project all columns. Using just `"source"` will result in empty columns!
+
+**Option A: Using the Template (Recommended)**
+
+1. Copy `Templates/dcr-fresh.json` and replace placeholders:
+   - `<Subscription-ID>` → Your subscription ID
+   - `<Resource-Group>` → Your resource group name
+   - `<DCE-Name>` → Your DCE name
+   - `<Workspace-Name>` → Your Log Analytics workspace name
+   - `<Table-Name>` → Your table name (without `_CL` suffix)
+
+2. Create the DCR:
+```bash
+az rest --method PUT \
+    --url "https://management.azure.com/subscriptions/<Sub-ID>/resourceGroups/rg-file-inventory/providers/Microsoft.Insights/dataCollectionRules/dcr-file-inventory?api-version=2022-06-01" \
+    --body @dcr-configured.json
+```
+
+3. Get the DCR immutable ID (save this for later):
+```bash
+az monitor data-collection rule show \
+    --name dcr-file-inventory \
+    --resource-group rg-file-inventory \
+    --query immutableId -o tsv
+```
+
+**Option B: Via Azure Portal**
+1. Navigate to **Monitor** → **Data Collection Rules** → **Create**
+2. Name: `dcr-file-inventory`
+3. Platform Type: **Custom**
+4. Data Collection Endpoint: Select your DCE
+5. Add data source → **Custom**
+6. Configure stream with schema from template
+7. **Important**: In transform, use explicit column projection
+
+### Step 6: Create Automation Account
 
 ```powershell
-# Create Automation Account with System Managed Identity
+# Create Automation Account
 az automation account create \
     --name aa-file-inventory \
     --resource-group rg-file-inventory \
@@ -249,81 +283,145 @@ az automation account identity assign \
     --name aa-file-inventory \
     --resource-group rg-file-inventory \
     --identity-type SystemAssigned
+
+# Get the Principal ID (save for RBAC assignments)
+az automation account show \
+    --name aa-file-inventory \
+    --resource-group rg-file-inventory \
+    --query identity.principalId -o tsv
 ```
 
-### Step 5: Assign RBAC Permissions
+### Step 7: Assign RBAC Permissions
 
 ```powershell
-# Get the Managed Identity Principal ID
-$principalId = (az automation account show --name aa-file-inventory --resource-group rg-file-inventory --query identity.principalId -o tsv)
+# Store the Principal ID
+$principalId = "<principal-id-from-step-6>"
 
-# Assign Storage Account Key Operator role
+# 1. Storage Account Key Operator (on storage account to scan)
 az role assignment create \
     --assignee $principalId \
     --role "Storage Account Key Operator Service Role" \
-    --scope /subscriptions/{sub}/resourceGroups/{rg}/providers/Microsoft.Storage/storageAccounts/{storage}
+    --scope "/subscriptions/<Sub-ID>/resourceGroups/<Storage-RG>/providers/Microsoft.Storage/storageAccounts/<Storage-Account>"
 
-# Assign Monitoring Metrics Publisher role on DCR
+# 2. Monitoring Metrics Publisher (on DCR)
 az role assignment create \
     --assignee $principalId \
     --role "Monitoring Metrics Publisher" \
-    --scope /subscriptions/{sub}/resourceGroups/rg-file-inventory/providers/Microsoft.Insights/dataCollectionRules/dcr-file-inventory
+    --scope "/subscriptions/<Sub-ID>/resourceGroups/rg-file-inventory/providers/Microsoft.Insights/dataCollectionRules/dcr-file-inventory"
 ```
 
-### Step 6: Import Required Modules
+### Step 8: Import PowerShell Modules
 
-In your Automation Account, import these modules from the gallery:
-- `Az.Accounts`
-- `Az.Storage`
+In Azure Portal:
+1. Navigate to your Automation Account
+2. Go to **Shared Resources** → **Modules** → **Browse gallery**
+3. Search and import:
+   - `Az.Accounts` (v2.x or later)
+   - `Az.Storage` (v5.x or later)
 
-### Step 7: Import the Runbook
+Or via PowerShell:
+```powershell
+# Import Az.Accounts
+Import-AzAutomationModule `
+    -ResourceGroupName "rg-file-inventory" `
+    -AutomationAccountName "aa-file-inventory" `
+    -Name "Az.Accounts" `
+    -ContentLinkUri "https://www.powershellgallery.com/api/v2/package/Az.Accounts"
+
+# Import Az.Storage
+Import-AzAutomationModule `
+    -ResourceGroupName "rg-file-inventory" `
+    -AutomationAccountName "aa-file-inventory" `
+    -Name "Az.Storage" `
+    -ContentLinkUri "https://www.powershellgallery.com/api/v2/package/Az.Storage"
+```
+
+### Step 9: Create Automation Variables
 
 ```powershell
-# Import runbook
+# DCE Endpoint
+az automation variable create \
+    --name FileInventory_LogAnalyticsDceEndpoint \
+    --resource-group rg-file-inventory \
+    --automation-account-name aa-file-inventory \
+    --value '"https://dce-file-inventory.<region>-1.ingest.monitor.azure.com"'
+
+# DCR Immutable ID
+az automation variable create \
+    --name FileInventory_LogAnalyticsDcrImmutableId \
+    --resource-group rg-file-inventory \
+    --automation-account-name aa-file-inventory \
+    --value '"dcr-xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"'
+
+# Stream Name (MUST use hyphen after Custom-, NOT underscore)
+az automation variable create \
+    --name FileInventory_LogAnalyticsStreamName \
+    --resource-group rg-file-inventory \
+    --automation-account-name aa-file-inventory \
+    --value '"Custom-FileInventory_CL"'
+
+# Table Name
+az automation variable create \
+    --name FileInventory_LogAnalyticsTableName \
+    --resource-group rg-file-inventory \
+    --automation-account-name aa-file-inventory \
+    --value '"FileInventory_CL"'
+```
+
+> ⚠️ **Important**: Stream name format is `Custom-<TableName>_CL` with a **hyphen** after "Custom", not an underscore!
+
+### Step 10: Import and Publish the Runbook
+
+```powershell
+# Create the runbook
 az automation runbook create \
     --name AzureFileInventoryScanner \
     --resource-group rg-file-inventory \
     --automation-account-name aa-file-inventory \
-    --type PowerShell \
-    --runbook-type PowerShell72
+    --type PowerShell72
 
-# Upload content
+# Upload the script content
 az automation runbook replace-content \
     --name AzureFileInventoryScanner \
     --resource-group rg-file-inventory \
     --automation-account-name aa-file-inventory \
     --content @Runbooks/AzureFileInventoryScanner.ps1
 
-# Publish
+# Publish the runbook
 az automation runbook publish \
     --name AzureFileInventoryScanner \
     --resource-group rg-file-inventory \
     --automation-account-name aa-file-inventory
 ```
 
-### Step 8: Create Automation Variables
+### Step 11: Validate Your Setup
+
+Run the validation script to verify everything is configured correctly:
 
 ```powershell
-# Create variables (replace with your values)
-az automation variable create --name FileInventory_LogAnalyticsDceEndpoint \
-    --resource-group rg-file-inventory \
-    --automation-account-name aa-file-inventory \
-    --value '"https://dce-file-inventory.eastus-1.ingest.monitor.azure.com"'
+.\Scripts\Test-FileInventorySetup.ps1 `
+    -SubscriptionId "<Subscription-ID>" `
+    -ResourceGroupName "rg-file-inventory" `
+    -AutomationAccountName "aa-file-inventory" `
+    -WorkspaceName "law-file-inventory" `
+    -DceName "dce-file-inventory" `
+    -DcrName "dcr-file-inventory" `
+    -TableName "FileInventory" `
+    -RunIngestionTest
+```
 
-az automation variable create --name FileInventory_LogAnalyticsDcrImmutableId \
-    --resource-group rg-file-inventory \
-    --automation-account-name aa-file-inventory \
-    --value '"dcr-xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"'
+### Step 12: Run Your First Scan
 
-az automation variable create --name FileInventory_LogAnalyticsStreamName \
-    --resource-group rg-file-inventory \
-    --automation-account-name aa-file-inventory \
-    --value '"Custom-FileInventory_CL"'
-
-az automation variable create --name FileInventory_LogAnalyticsTableName \
-    --resource-group rg-file-inventory \
-    --automation-account-name aa-file-inventory \
-    --value '"FileInventory_CL"'
+```powershell
+Start-AzAutomationRunbook -Name "AzureFileInventoryScanner" `
+    -ResourceGroupName "rg-file-inventory" `
+    -AutomationAccountName "aa-file-inventory" `
+    -Parameters @{
+        StorageAccountName = "mystorageaccount"
+        StorageAccountResourceGroup = "my-storage-rg"
+        SubscriptionId = "00000000-0000-0000-0000-000000000000"
+        SkipHashComputation = $true
+    }
 ```
 
 ## Configuration
@@ -477,111 +575,276 @@ FileInventory_CL
 
 ## Troubleshooting
 
-### Common Issues
+### Common Issues and Solutions
 
 | Issue | Possible Cause | Solution |
 |-------|----------------|----------|
 | **Authentication failed** | Managed Identity not enabled | Enable System-Assigned Managed Identity on Automation Account |
-| **Access denied to storage** | Missing RBAC permissions | Assign `Storage Account Key Operator Service Role` |
-| **Data not appearing in Log Analytics** | DCR misconfigured | Verify DCE endpoint, DCR immutable ID, and stream name |
-| **Job timeout** | Very large file shares | Increase job timeout or split into multiple shares |
-| **Out of memory** | Batch size too large | Reduce `BatchSize` parameter |
+| **Access denied to storage** | Missing RBAC permissions | Assign `Storage Account Key Operator Service Role` to MI |
+| **Data not appearing in Log Analytics** | DCR misconfigured | Run validation script; check DCE endpoint, DCR immutable ID |
+| **Data ingests but columns are empty** | DCR transform using just `"source"` | Use explicit column projection in `transformKql` (see below) |
+| **Stream name error** | Wrong stream name format | Must be `Custom-<TableName>_CL` with **hyphen** after Custom |
+| **Job timeout (3 hours)** | File share too large | Use Hybrid Worker (see section below) |
+| **Out of memory** | Batch size too large | Reduce `BatchSize` parameter to 250-500 |
 
-### Checking Logs
+### Critical: DCR Transform Configuration
+
+> ⚠️ **This is the #1 cause of data appearing empty in Log Analytics!**
+
+When you create a DCR separately from the table, you **must** use explicit column projection in the `transformKql`. Simply using `"source"` will NOT work.
+
+**❌ WRONG (columns will be empty):**
+```json
+"transformKql": "source"
+```
+
+**✅ CORRECT (all columns populated):**
+```json
+"transformKql": "source | project TimeGenerated, StorageAccount, FileShare, FilePath, FileName, FileExtension, FileSizeBytes, FileSizeMB, FileSizeGB, LastModified, Created, AgeInDays, FileHash, IsDuplicate, DuplicateCount, DuplicateGroupId, FileCategory, AgeBucket, SizeBucket, ScanTimestamp, ExecutionId"
+```
+
+### Verify Data Ingestion
 
 ```kusto
-// Check for scan execution records
-FileInventory_CL
+// Check if records are being ingested
+<TableName>_CL
 | where TimeGenerated > ago(1h)
-| summarize count() by ExecutionId, bin(TimeGenerated, 5m)
+| take 10
 
-// Check ingestion latency
-FileInventory_CL
+// Check which columns have data
+<TableName>_CL
 | where TimeGenerated > ago(1h)
-| extend IngestionDelay = ingestion_time() - TimeGenerated
-| summarize avg(IngestionDelay), max(IngestionDelay)
+| project TimeGenerated, StorageAccount, FileShare, FileName
+| take 5
+
+// Verify by ExecutionId
+<TableName>_CL
+| where ExecutionId == "your-execution-id"
+| count
 ```
 
-### Verifying RBAC Assignments
+### Check Runbook Job Status
 
 ```powershell
-# Check role assignments for Managed Identity
-az role assignment list --assignee <principal-id> --output table
+# Get recent job status
+Get-AzAutomationJob -ResourceGroupName "rg-file-inventory" `
+    -AutomationAccountName "aa-file-inventory" `
+    -RunbookName "AzureFileInventoryScanner" | 
+    Select-Object -First 5 | 
+    Format-Table Status, StartTime, EndTime
 ```
 
-## Durable Functions (Large Scale)
+### Verify RBAC Assignments
 
-For file shares larger than 2TB or when scans exceed 3 hours, use the **Azure Durable Functions** implementation.
+```powershell
+# Get Automation Account principal ID
+$principalId = (az automation account show `
+    --name aa-file-inventory `
+    --resource-group rg-file-inventory `
+    --query identity.principalId -o tsv)
+
+# List all role assignments
+az role assignment list --assignee $principalId --output table
+```
+
+### Debug DCR Configuration
+
+```bash
+# View DCR details
+az monitor data-collection rule show \
+    --name dcr-file-inventory \
+    --resource-group rg-file-inventory
+
+# Check the immutable ID
+az monitor data-collection rule show \
+    --name dcr-file-inventory \
+    --resource-group rg-file-inventory \
+    --query immutableId -o tsv
+```
+
+## Validation Script
+
+The repository includes a comprehensive validation script that checks all components of your setup.
+
+### Features
+
+The `Test-FileInventorySetup.ps1` script performs 28 tests across these categories:
+
+| Category | Tests |
+|----------|-------|
+| **Authentication** | Azure login, subscription access |
+| **DCE Validation** | Existence, endpoint accessibility, configuration |
+| **DCR Validation** | Existence, immutable ID, stream configuration, transform |
+| **Table Validation** | Existence, schema columns, column count |
+| **Schema Comparison** | DCR stream vs Table schema alignment |
+| **Automation Account** | Existence, managed identity, required variables |
+| **RBAC Validation** | Monitoring Metrics Publisher role on DCR |
+| **Ingestion Test** | Optional end-to-end data ingestion verification |
+
+### Usage
+
+```powershell
+# Basic validation (no ingestion test)
+.\Scripts\Test-FileInventorySetup.ps1 `
+    -SubscriptionId "<Subscription-ID>" `
+    -ResourceGroupName "<Resource-Group>" `
+    -AutomationAccountName "<Automation-Account>" `
+    -WorkspaceName "<Workspace-Name>" `
+    -DceName "<DCE-Name>" `
+    -DcrName "<DCR-Name>" `
+    -TableName "<Table-Name>"
+
+# Full validation with ingestion test
+.\Scripts\Test-FileInventorySetup.ps1 `
+    -SubscriptionId "<Subscription-ID>" `
+    -ResourceGroupName "<Resource-Group>" `
+    -AutomationAccountName "<Automation-Account>" `
+    -WorkspaceName "<Workspace-Name>" `
+    -DceName "<DCE-Name>" `
+    -DcrName "<DCR-Name>" `
+    -TableName "<Table-Name>" `
+    -RunIngestionTest
+```
+
+### Sample Output
+
+```
+============================================================
+Azure File Inventory Scanner - Setup Validation
+============================================================
+Subscription: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+Resource Group: rg-file-inventory
+Started: 2026-01-27 10:30:00
+============================================================
+
+--- Authentication Tests ---
+[PASS] Azure Authentication
+       Logged in as: user@domain.com
+[PASS] Subscription Access
+       Subscription: My Subscription
+
+--- DCE Tests ---
+[PASS] DCE Exists
+       DCE 'dce-file-inventory' found
+[PASS] DCE Endpoint Accessible
+       Endpoint: https://dce-file-inventory.eastus-1.ingest.monitor.azure.com
+
+--- DCR Tests ---
+[PASS] DCR Exists
+       DCR 'dcr-file-inventory' found
+[PASS] DCR Immutable ID
+       ID: dcr-xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+[PASS] DCR Transform Configured
+       Transform explicitly projects all columns
+
+--- Table Tests ---
+[PASS] Table Exists
+       Table 'FileInventory_CL' found
+[PASS] Table Schema Valid
+       Found 21 columns (expected 21)
+
+--- RBAC Tests ---
+[PASS] Automation Account Has DCR Role
+       'Monitoring Metrics Publisher' role assigned
+
+============================================================
+Summary: 27/28 tests passed
+============================================================
+```
+
+### Interpreting Results
+
+| Result | Meaning | Action |
+|--------|---------|--------|
+| `[PASS]` | Test succeeded | No action needed |
+| `[FAIL]` | Test failed | Review the details and fix the issue |
+| `[WARN]` | Warning condition | May work but review recommended |
+
+### Common Validation Failures
+
+| Failure | Fix |
+|---------|-----|
+| DCR Transform uses 'source' only | Update DCR with explicit column projection |
+| Missing RBAC role on DCR | Assign `Monitoring Metrics Publisher` to Automation Account MI |
+| Schema mismatch | Recreate table or DCR to align schemas |
+| Variable not found | Create missing Automation Account variable |
+| Ingestion test failed | Check DCE endpoint URL and authentication |
+
+## Hybrid Runbook Worker (Large Scale)
+
+For file shares larger than 2TB or when scans exceed 3 hours, use a **Hybrid Runbook Worker** to bypass Azure Automation's 3-hour limit.
+
+### When to Use Hybrid Worker
+
+| Scenario | Recommendation |
+|----------|----------------|
+| File shares < 2TB | Standard Azure Automation (cloud-based) |
+| File shares > 2TB | Hybrid Runbook Worker |
+| Scans exceeding 3 hours | Hybrid Runbook Worker |
+| Need private network access | Hybrid Runbook Worker |
 
 ### Key Benefits
 
 | Feature | Description |
 |---------|-------------|
-| **No Timeout** | Can run for days if needed |
-| **Parallel Processing** | Scan 10+ directories simultaneously |
-| **Auto-Checkpointing** | Resumes from last checkpoint on failure |
-| **Real-time Status** | API endpoints for progress monitoring |
-| **Cost Effective** | Pay only for actual execution time |
+| **No Timeout** | Runs until completion (no 3-hour limit) |
+| **Same Script** | Uses the exact same PowerShell runbook |
+| **Private Access** | Can access storage via private endpoints |
+| **Local Compute** | Runs on your VM with dedicated resources |
 
-### Quick Start
-
-```bash
-cd DurableFunctions
-
-# Install dependencies
-pip install -r requirements.txt
-
-# Configure (copy template and edit)
-cp local.settings.template.json local.settings.json
-
-# Run locally
-func start
-
-# Start a scan
-curl -X POST http://localhost:7071/api/start-scan \
-  -H "Content-Type: application/json" \
-  -d '{"storageAccountName": "mystorageaccount", "skipHashComputation": true}'
-```
-
-### Deploy to Azure
+### Quick Setup
 
 ```powershell
-.\DurableFunctions\Deploy-DurableFunctions.ps1 `
+# 1. Create a Windows VM (or use existing)
+# 2. Run the setup script from the HybridWorker folder
+.\HybridWorker\Setup-HybridWorker.ps1 `
+    -SubscriptionId "<Sub-ID>" `
     -ResourceGroupName "rg-file-inventory" `
-    -Location "eastus" `
-    -FunctionAppName "func-file-inventory" `
-    -StorageAccountName "stfuncinventory"
+    -AutomationAccountName "aa-file-inventory" `
+    -HybridWorkerGroupName "hw-file-inventory" `
+    -VmName "vm-hybrid-worker" `
+    -VmResourceGroupName "rg-hybrid-worker"
 ```
 
-📖 **Full documentation:** [DurableFunctions/README.md](DurableFunctions/README.md)
+### Running on Hybrid Worker
+
+```powershell
+# Start runbook on Hybrid Worker
+Start-AzAutomationRunbook -Name "AzureFileInventoryScanner" `
+    -ResourceGroupName "rg-file-inventory" `
+    -AutomationAccountName "aa-file-inventory" `
+    -RunOn "hw-file-inventory" `
+    -Parameters @{
+        StorageAccountName = "mystorageaccount"
+        StorageAccountResourceGroup = "my-rg"
+        SubscriptionId = "00000000-0000-0000-0000-000000000000"
+        SkipHashComputation = $true
+    }
+```
+
+📖 **Full documentation:** [HybridWorker/SETUP-GUIDE.md](HybridWorker/SETUP-GUIDE.md)
 
 ## File Structure
 
 ```
 AzureFileInventoryScanner/
-├── README.md                           # This file
+├── README.md                               # This file
+├── LICENSE                                 # MIT License
+├── .gitignore                              # Git ignore rules
 ├── Runbooks/
-│   └── AzureFileInventoryScanner.ps1   # Main runbook script (PowerShell)
-├── DurableFunctions/                   # Python Durable Functions (for large shares)
-│   ├── README.md                       # Durable Functions documentation
-│   ├── function_app.py                 # HTTP triggers
-│   ├── requirements.txt                # Python dependencies
-│   ├── host.json                       # Function app configuration
-│   ├── Deploy-DurableFunctions.ps1     # Deployment script
-│   ├── orchestrator_main/              # Main orchestrator
-│   ├── orchestrator_file_share/        # Sub-orchestrator per share
-│   ├── activity_list_file_shares/      # List shares activity
-│   ├── activity_scan_directory/        # Scan directory activity
-│   └── activity_send_to_log_analytics/ # Send to LA activity
+│   └── AzureFileInventoryScanner.ps1       # Main runbook script (PowerShell 7.x)
 ├── Templates/
 │   ├── file-inventory-table-schema.json    # Log Analytics table schema
-│   └── dcr-template.json               # Data Collection Rule ARM template
+│   └── dcr-fresh.json                      # Data Collection Rule template
 ├── Scripts/
-│   ├── Deploy-AzureInfrastructure.ps1  # Automated deployment script
-│   └── Configure-AutomationVariables.ps1   # Variable configuration helper
+│   ├── Deploy-AzureInfrastructure.ps1      # Automated deployment script
+│   ├── Configure-AutomationVariables.ps1   # Variable configuration helper
+│   └── Test-FileInventorySetup.ps1         # Comprehensive validation script
 ├── Queries/
-│   └── sample-queries.kql              # Sample KQL queries
-└── .gitignore
+│   └── sample-queries.kql                  # Sample KQL queries for analysis
+└── HybridWorker/
+    ├── SETUP-GUIDE.md                      # Hybrid Worker setup documentation
+    └── Setup-HybridWorker.ps1              # Hybrid Worker deployment script
 ```
 
 ## Contributing
