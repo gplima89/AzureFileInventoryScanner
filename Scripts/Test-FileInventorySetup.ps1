@@ -38,13 +38,13 @@
 
 .EXAMPLE
     .\Test-FileInventorySetup.ps1 `
-        -SubscriptionId "dd8df97d-4198-4753-855e-40b86901b818" `
-        -ResourceGroupName "rg-file-lifecycle" `
-        -AutomationAccountName "aa-file-lifecycle" `
-        -WorkspaceName "stgfilelifecycle" `
-        -DceName "StgFileLifeCycleDCEdp" `
-        -DcrName "StgFileLifeCycleDCR" `
-        -TableName "StorageLifeCycle01" `
+        -SubscriptionId "<Subscription-ID>" `
+        -ResourceGroupName "<Resource-Group>" `
+        -AutomationAccountName "<Automation-Account>" `
+        -WorkspaceName "<Workspace-Name>" `
+        -DceName "<DCE-Name>" `
+        -DcrName "<DCR-Name>" `
+        -TableName "<Table-Name>" `
         -RunIngestionTest
 
 .NOTES

@@ -1,8 +1,8 @@
 {
     "properties": {
-        "dataCollectionEndpointId": "/subscriptions/dd8df97d-4198-4753-855e-40b86901b818/resourceGroups/rg-file-lifecycle/providers/Microsoft.Insights/dataCollectionEndpoints/StgFileLifeCycleDCEdp",
+        "dataCollectionEndpointId": "/subscriptions/<Subscription-ID>/resourceGroups/<Resource-Group>/providers/Microsoft.Insights/dataCollectionEndpoints/<DCE-Name>",
         "streamDeclarations": {
-            "Custom-StorageLifeCycle01_CL": {
+            "Custom-<Table-Name>_CL": {
                 "columns": [
                     {"name": "TimeGenerated", "type": "datetime"},
                     {"name": "StorageAccount", "type": "string"},
@@ -31,17 +31,17 @@
         "destinations": {
             "logAnalytics": [
                 {
-                    "workspaceResourceId": "/subscriptions/dd8df97d-4198-4753-855e-40b86901b818/resourceGroups/rg-file-lifecycle/providers/Microsoft.OperationalInsights/workspaces/stgfilelifecycle",
+                    "workspaceResourceId": "/subscriptions/<Subscription-ID>/resourceGroups/<Resource-Group>/providers/Microsoft.OperationalInsights/workspaces/<Workspace-Name>",
                     "name": "logAnalyticsDestination"
                 }
             ]
         },
         "dataFlows": [
             {
-                "streams": ["Custom-StorageLifeCycle01_CL"],
+                "streams": ["Custom-<Table-Name>_CL"],
                 "destinations": ["logAnalyticsDestination"],
                 "transformKql": "source | project TimeGenerated, StorageAccount, FileShare, FilePath, FileName, FileExtension, FileSizeBytes, FileSizeMB, FileSizeGB, LastModified, Created, AgeInDays, FileHash, IsDuplicate, DuplicateCount, DuplicateGroupId, FileCategory, AgeBucket, SizeBucket, ScanTimestamp, ExecutionId",
-                "outputStream": "Custom-StorageLifeCycle01_CL"
+                "outputStream": "Custom-<Table-Name>_CL"
             }
         ]
     }
