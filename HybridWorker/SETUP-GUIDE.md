@@ -59,6 +59,49 @@ This guide walks you through setting up an Azure Automation Hybrid Runbook Worke
    - Log Analytics endpoint
    - Azure Automation service
 
+## Permissions Required
+
+### User Permissions (to run the setup)
+
+| Permission | Scope | Purpose |
+|------------|-------|---------|
+| **Contributor** | Resource Group | Create/manage VMs, Automation resources |
+| **User Access Administrator** | Resource Group | Assign RBAC roles to Managed Identity |
+
+### VM Managed Identity Permissions
+
+The Hybrid Worker VM uses a **System-Assigned Managed Identity** to authenticate to Azure services. The following RBAC roles must be assigned:
+
+| Role | Scope | Purpose |
+|------|-------|---------|
+| **Storage Account Key Operator Service Role** | Target Storage Account(s) | Access storage account keys to list and enumerate files in Azure File Shares |
+| **Monitoring Metrics Publisher** | Data Collection Rule (DCR) | Send file inventory data to Log Analytics via the DCR ingestion endpoint |
+
+### Automation Account Permissions
+
+If using the Automation Account's Managed Identity (for sandbox runs), it also needs:
+
+| Role | Scope | Purpose |
+|------|-------|---------|
+| **Storage Account Key Operator Service Role** | Target Storage Account(s) | Access storage account keys for file enumeration |
+| **Monitoring Metrics Publisher** | Data Collection Rule (DCR) | Ingest data to Log Analytics |
+
+### Network/Firewall Requirements
+
+The Hybrid Worker VM requires **outbound HTTPS (443)** access to:
+
+| Endpoint | Purpose |
+|----------|---------|
+| `*.azure-automation.net` | Azure Automation service communication |
+| `*.blob.core.windows.net` | Azure Blob Storage (runbook content) |
+| `*.file.core.windows.net` | Azure Files (target file shares) |
+| `*.ods.opinsights.azure.com` | Log Analytics data ingestion |
+| `*.ingest.monitor.azure.com` | DCR ingestion endpoint |
+| `login.microsoftonline.com` | Azure AD authentication |
+| `management.azure.com` | Azure Resource Manager |
+
+> 💡 **Tip**: For enhanced security, use **Private Endpoints** for Storage Accounts and Log Analytics workspaces in enterprise environments.
+
 ## Step-by-Step Setup
 
 ### Step 1: Create or Select a VM
