@@ -74,8 +74,13 @@ The Hybrid Worker VM uses a **System-Assigned Managed Identity** to authenticate
 
 | Role | Scope | Purpose |
 |------|-------|---------|
-| **Storage Account Key Operator Service Role** | Target Storage Account(s) | Access storage account keys to list and enumerate files in Azure File Shares |
+| **Storage Account Key Operator Service Role** | Target Storage Account(s) | Retrieve storage account keys to authenticate to file shares |
+| **Storage File Data Privileged Reader** | Target Storage Account(s) | Read file/folder metadata and content (required for RBAC-based access) |
 | **Monitoring Metrics Publisher** | Data Collection Rule (DCR) | Send file inventory data to Log Analytics via the DCR ingestion endpoint |
+
+> **Note on Storage Authentication:**
+> - **Key-based access** (default): The "Storage Account Key Operator Service Role" retrieves the storage account key, which grants full access to all file shares. This is simpler but gives broad access.
+> - **RBAC-based access** (more secure): Use "Storage File Data Privileged Reader" for granular, identity-based access without needing storage keys. This requires the file share to have RBAC enabled.
 
 ### Automation Account Permissions
 

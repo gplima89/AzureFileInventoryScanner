@@ -230,6 +230,14 @@ if ($TargetStorageAccountId) {
         --scope $TargetStorageAccountId `
         --output none 2>$null
     Write-Host "  ✓ Assigned Storage Account Key Operator role" -ForegroundColor Green
+    
+    Write-Host "  Assigning Storage File Data Privileged Reader role..." -ForegroundColor Yellow
+    az role assignment create `
+        --assignee $vmPrincipalId `
+        --role "Storage File Data Privileged Reader" `
+        --scope $TargetStorageAccountId `
+        --output none 2>$null
+    Write-Host "  ✓ Assigned Storage File Data Privileged Reader role" -ForegroundColor Green
 }
 else {
     Write-Host "  ⚠️ TargetStorageAccountId not provided - assign manually later" -ForegroundColor Yellow
@@ -275,9 +283,16 @@ Write-Host ""
 if (-not $TargetStorageAccountId) {
     Write-Host "3. Assign storage account permissions:" -ForegroundColor White
     Write-Host @"
+   # Key-based access (retrieve storage keys)
    az role assignment create ``
        --assignee "$vmPrincipalId" ``
        --role "Storage Account Key Operator Service Role" ``
+       --scope "/subscriptions/$subscriptionId/resourceGroups/<rg>/providers/Microsoft.Storage/storageAccounts/<storage>"
+
+   # RBAC-based data access (read file share content)
+   az role assignment create ``
+       --assignee "$vmPrincipalId" ``
+       --role "Storage File Data Privileged Reader" ``
        --scope "/subscriptions/$subscriptionId/resourceGroups/<rg>/providers/Microsoft.Storage/storageAccounts/<storage>"
 "@ -ForegroundColor Cyan
     Write-Host ""
