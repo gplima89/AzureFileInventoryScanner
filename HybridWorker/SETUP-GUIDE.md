@@ -107,7 +107,66 @@ The Hybrid Worker VM requires **outbound HTTPS (443)** access to:
 
 > 💡 **Tip**: For enhanced security, use **Private Endpoints** for Storage Accounts and Log Analytics workspaces in enterprise environments.
 
-## Step-by-Step Setup
+## Automated Setup Scripts
+
+For convenience, we provide PowerShell scripts to automate the Hybrid Worker setup process.
+
+### Windows Hybrid Worker
+
+Use `Setup-HybridWorker.ps1` to set up a Windows-based Hybrid Worker:
+
+```powershell
+# Basic setup with existing Windows VM
+.\Setup-HybridWorker.ps1 `
+    -ResourceGroupName "rg-file-inventory" `
+    -Location "eastus" `
+    -AutomationAccountName "aa-file-inventory" `
+    -VmName "vm-hybrid-worker" `
+    -CreateNewVm $false
+
+# Full setup with RBAC assignments
+.\Setup-HybridWorker.ps1 `
+    -ResourceGroupName "rg-file-inventory" `
+    -Location "eastus" `
+    -AutomationAccountName "aa-file-inventory" `
+    -VmName "vm-hybrid-worker" `
+    -WorkerGroupName "WindowsWorkers" `
+    -TargetStorageAccountId "/subscriptions/<sub-id>/resourceGroups/<rg>/providers/Microsoft.Storage/storageAccounts/<storage>" `
+    -DcrResourceId "/subscriptions/<sub-id>/resourceGroups/<rg>/providers/Microsoft.Insights/dataCollectionRules/<dcr>"
+```
+
+### Linux Hybrid Worker
+
+Use `Setup-LinuxHybridWorker.ps1` to set up a Linux-based Hybrid Worker:
+
+```powershell
+# Basic setup
+.\Setup-LinuxHybridWorker.ps1 `
+    -ResourceGroupName "rg-file-inventory" `
+    -AutomationAccountName "aa-file-inventory" `
+    -VmName "my-linux-vm" `
+    -VmResourceGroupName "rg-linux-vms"
+
+# Full setup with custom worker group and RBAC
+.\Setup-LinuxHybridWorker.ps1 `
+    -ResourceGroupName "rg-file-inventory" `
+    -AutomationAccountName "aa-file-inventory" `
+    -VmName "my-linux-vm" `
+    -VmResourceGroupName "rg-linux-vms" `
+    -WorkerGroupName "LinuxWorkers" `
+    -TargetStorageAccountId "/subscriptions/<sub-id>/resourceGroups/<rg>/providers/Microsoft.Storage/storageAccounts/<storage>" `
+    -DcrResourceId "/subscriptions/<sub-id>/resourceGroups/<rg>/providers/Microsoft.Insights/dataCollectionRules/<dcr>"
+```
+
+**Supported Linux Distributions:**
+- Ubuntu 18.04, 20.04, 22.04 LTS
+- RHEL 7, 8, 9
+- CentOS 7, 8
+- SUSE Linux Enterprise Server 12, 15
+
+> ⚠️ **Note for Linux VMs:** You must install PowerShell Core and Az modules on the Linux VM after the Hybrid Worker extension is installed. See [Step 4: Install PowerShell Modules](#step-4-install-powershell-modules-on-the-vm) for Linux-specific instructions.
+
+## Manual Step-by-Step Setup
 
 ### Step 1: Create or Select a VM
 
@@ -188,7 +247,9 @@ az automation hrwg hrw create `
 
 ### Step 4: Install PowerShell Modules on the VM
 
-Connect to the VM (RDP for Windows) and run:
+#### For Windows VMs
+
+Connect to the VM via RDP and run in an elevated PowerShell:
 
 ```powershell
 # Run as Administrator
@@ -199,6 +260,32 @@ Install-Module -Name Az.Storage -Force -AllowClobber
 # Verify installation
 Get-Module -Name Az.Accounts -ListAvailable
 Get-Module -Name Az.Storage -ListAvailable
+```
+
+#### For Linux VMs
+
+Connect to the VM via SSH and run:
+
+```bash
+# Install PowerShell Core (Ubuntu/Debian)
+sudo apt-get update
+sudo apt-get install -y wget apt-transport-https software-properties-common
+wget -q "https://packages.microsoft.com/config/ubuntu/$(lsb_release -rs)/packages-microsoft-prod.deb"
+sudo dpkg -i packages-microsoft-prod.deb
+sudo apt-get update
+sudo apt-get install -y powershell
+
+# Install PowerShell Core (RHEL/CentOS)
+# sudo yum install -y https://packages.microsoft.com/config/rhel/7/packages-microsoft-prod.rpm
+# sudo yum install -y powershell
+
+# Start PowerShell and install Az modules
+pwsh -Command "Install-Module -Name Az.Accounts -Force -AllowClobber -Scope AllUsers"
+pwsh -Command "Install-Module -Name Az.Storage -Force -AllowClobber -Scope AllUsers"
+
+# Verify installation
+pwsh -Command "Get-Module -Name Az.Accounts -ListAvailable"
+pwsh -Command "Get-Module -Name Az.Storage -ListAvailable"
 ```
 
 ### Step 5: Grant RBAC Permissions to VM's Managed Identity
