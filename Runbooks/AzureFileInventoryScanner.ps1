@@ -83,8 +83,8 @@ param(
     [Parameter(Mandatory = $false)]
     [int]$MaxFileSizeForHashMB = 100,
     
-    [Parameter(Mandatory = $false)]
-    [bool]$SkipHashComputation = $false,
+    [Parameter(Mandatory = $true)]
+    [bool]$SkipHashComputation = $true,
     
     [Parameter(Mandatory = $false)]
     [int]$BatchSize = 500,
@@ -201,7 +201,7 @@ function Write-Log {
         return
     }
     
-    $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+    $timestamp = Get-Date -Format "yyyy-MM-dd"
     $logMessage = "[$timestamp] [$Level] $Message"
     
     # Use Write-Output for Azure Automation compatibility (appears in job output)
@@ -782,7 +782,7 @@ function Add-FileToCurrentBatch {
         FileCategory     = Get-FileCategory -Extension $fileExtension
         AgeBucket        = Get-AgeBucket -AgeInDays $ageInDays
         SizeBucket       = Get-SizeBucket -SizeBytes $FileSizeBytes
-        ScanTimestamp    = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+        ScanTimestamp    = Get-Date -Format "yyyy-MM-dd"
         ExecutionId      = $script:ExecutionId
         TimeGenerated    = (Get-Date).ToUniversalTime()
     }
