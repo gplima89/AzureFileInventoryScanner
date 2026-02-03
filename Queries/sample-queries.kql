@@ -274,6 +274,34 @@ FileInventory_CL
     HashCoveragePercent = round(HashesComputed * 100.0 / TotalFiles, 2)
 
 
+// 5.5 - Find Duplicate Records by FileName, Size, and ScanTimestamp
+// Identifies records with identical FileName, FileSizeBytes, and ScanTimestamp values
+FileInventory_CL
+| where TimeGenerated > ago(24h)
+| summarize 
+    DuplicateCount = count(),
+    FilePaths = make_set(FilePath),
+    StorageAccounts = make_set(StorageAccount),
+    FileShares = make_set(FileShare)
+    by FileName, FileSizeBytes, ScanTimestamp
+| where DuplicateCount > 1
+| order by DuplicateCount desc, FileSizeBytes desc
+
+
+// 5.6 - Duplicate Records Detail View
+// Shows all individual duplicate records with their full paths
+FileInventory_CL
+| where TimeGenerated > ago(24h)
+| summarize Count = count() by FileName, FileSizeBytes, ScanTimestamp
+| where Count > 1
+| join kind=inner (
+    FileInventory_CL
+    | where TimeGenerated > ago(24h)
+) on FileName, FileSizeBytes, ScanTimestamp
+| project-away FileName1, FileSizeBytes1, ScanTimestamp1, Count
+| order by FileName, FileSizeBytes, ScanTimestamp
+
+
 // ----------------------------------------------------------------------------
 // SECTION 6: FOLDER ANALYSIS
 // ----------------------------------------------------------------------------
