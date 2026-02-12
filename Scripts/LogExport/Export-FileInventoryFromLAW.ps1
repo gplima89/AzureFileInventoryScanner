@@ -29,6 +29,10 @@
 .PARAMETER CombineFiles
     If specified, combines all batch files into a single CSV file.
 
+.PARAMETER RemoveBatchFiles
+    If specified along with -CombineFiles, automatically removes batch files after
+    successful merge (validates combined file size before deletion).
+
 .PARAMETER StartDate
     Optional. Start date for filtering records by TimeGenerated.
 
@@ -49,6 +53,9 @@
 
 .EXAMPLE
     .\Export-FileInventoryFromLAW.ps1 -WorkspaceId "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" -BatchSize 50000 -CombineFiles
+
+.EXAMPLE
+    .\Export-FileInventoryFromLAW.ps1 -WorkspaceId "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" -CombineFiles -RemoveBatchFiles
 
 .EXAMPLE
     .\Export-FileInventoryFromLAW.ps1 -WorkspaceId "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" -StartDate "2026-02-01" -EndDate "2026-02-12"
@@ -74,6 +81,9 @@ param(
     
     [Parameter(Mandatory = $false)]
     [switch]$CombineFiles,
+    
+    [Parameter(Mandatory = $false)]
+    [switch]$RemoveBatchFiles,
     
     [Parameter(Mandatory = $false)]
     [string]$StartDate,
@@ -338,19 +348,35 @@ if ($CombineFiles -and $exportedFiles.Count -gt 1) {
     Write-ProgressMessage "" -Status "Info"
     Write-ProgressMessage "Combining files into single CSV..." -Status "Info"
     
+    # Calculate total size of all batch files (for validation)
+    $totalBatchSize = 0
+    foreach ($file in $exportedFiles) {
+        if (Test-Path $file) {
+            $totalBatchSize += (Get-Item $file).Length
+        }
+    }
+    
     $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
     $combinedFileName = "${OutputFileName}_combined_${timestamp}.csv"
     $combinedFilePath = Join-Path $OutputPath $combinedFileName
     
+    # Sort files by batch number for proper ordering
+    $sortedFiles = $exportedFiles | Sort-Object { 
+        if ($_ -match '_batch(\d+)_') { [int]$Matches[1] } else { 0 }
+    }
+    
     $firstFile = $true
     $combinedCount = 0
+    $headerSize = 0
     
-    foreach ($file in $exportedFiles) {
+    foreach ($file in $sortedFiles) {
         Write-ProgressMessage "  Processing: $(Split-Path $file -Leaf)..." -Status "Info"
         
         if ($firstFile) {
             # Include header from first file
             Get-Content $file | Set-Content $combinedFilePath -Encoding UTF8
+            # Estimate header size (first line)
+            $headerSize = (Get-Content $file -TotalCount 1).Length + 2  # +2 for CRLF
             $firstFile = $false
         }
         else {
@@ -369,13 +395,45 @@ if ($CombineFiles -and $exportedFiles.Count -gt 1) {
     Write-ProgressMessage "Combined file created: $combinedFileName" -Status "Success"
     Write-ProgressMessage "Combined file size: $combinedFileSizeMB MB ($combinedFileSizeGB GB)" -Status "Info"
     
-    # Optionally remove individual batch files
-    $removePrompt = Read-Host "Do you want to remove the individual batch files? (y/n)"
-    if ($removePrompt -eq 'y') {
-        foreach ($file in $exportedFiles) {
-            Remove-Item $file -Force
+    # Validate combined file size before removing batch files
+    # Expected size = total batch size - (header size * (file count - 1))
+    $expectedMinSize = $totalBatchSize - ($headerSize * ($exportedFiles.Count - 1)) - ($exportedFiles.Count * 100)  # Allow some tolerance
+    $expectedMaxSize = $totalBatchSize  # Combined should never be larger than total
+    
+    $sizeValidationPassed = ($combinedFileInfo.Length -ge ($expectedMinSize * 0.95)) -and ($combinedFileInfo.Length -le $expectedMaxSize)
+    
+    if ($sizeValidationPassed) {
+        Write-ProgressMessage "Size validation passed: Combined file is within expected range" -Status "Success"
+        
+        # Remove batch files if requested or if RemoveBatchFiles switch is set
+        if ($RemoveBatchFiles) {
+            foreach ($file in $exportedFiles) {
+                if (Test-Path $file) {
+                    Remove-Item $file -Force
+                }
+            }
+            Write-ProgressMessage "Removed $($exportedFiles.Count) batch files" -Status "Success"
+            $exportedFiles.Clear()
+            $exportedFiles.Add($combinedFilePath)
         }
-        Write-ProgressMessage "Removed $($exportedFiles.Count) batch files" -Status "Success"
+        else {
+            # Ask user if they want to remove batch files
+            $removePrompt = Read-Host "Do you want to remove the individual batch files? (y/n)"
+            if ($removePrompt -eq 'y') {
+                foreach ($file in $exportedFiles) {
+                    if (Test-Path $file) {
+                        Remove-Item $file -Force
+                    }
+                }
+                Write-ProgressMessage "Removed $($exportedFiles.Count) batch files" -Status "Success"
+                $exportedFiles.Clear()
+                $exportedFiles.Add($combinedFilePath)
+            }
+        }
+    }
+    else {
+        Write-ProgressMessage "Size validation WARNING: Combined file size ($($combinedFileInfo.Length) bytes) differs from expected range ($expectedMinSize - $expectedMaxSize bytes)" -Status "Warning"
+        Write-ProgressMessage "Batch files will NOT be removed automatically. Please verify the combined file manually." -Status "Warning"
     }
 }
 

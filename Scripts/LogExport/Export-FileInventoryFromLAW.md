@@ -40,6 +40,7 @@ The `Export-FileInventoryFromLAW.ps1` script exports file inventory data from an
 | `OutputPath` | No | Current directory | Path for output CSV files |
 | `OutputFileName` | No | FileInventory_Export | Base name for output files |
 | `CombineFiles` | No | False | Combine batches into single CSV |
+| `RemoveBatchFiles` | No | False | Auto-remove batch files after successful merge (validates size first) |
 | `StartDate` | No | - | Filter by start date (e.g., "2026-02-01") |
 | `EndDate` | No | - | Filter by end date (e.g., "2026-02-12") |
 | `StorageAccountFilter` | No | - | Filter by storage account name |
@@ -98,6 +99,11 @@ Get-AzOperationalInsightsWorkspace | Select-Object Name, CustomerId
 #### Export and Combine into Single File
 ```powershell
 .\Export-FileInventoryFromLAW.ps1 -WorkspaceId "<your-workspace-id>" -OutputPath "C:\temp\exports" -CombineFiles
+```
+
+#### Export, Combine, and Auto-Remove Batch Files
+```powershell
+.\Export-FileInventoryFromLAW.ps1 -WorkspaceId "<your-workspace-id>" -OutputPath "C:\temp\exports" -CombineFiles -RemoveBatchFiles
 ```
 
 #### Export with Smaller Batch Size (for large files or timeout issues)
