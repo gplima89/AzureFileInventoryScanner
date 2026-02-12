@@ -55,7 +55,7 @@ Open a PowerShell terminal (PowerShell 5.1 or PowerShell 7+).
 ### Step 2: Navigate to the Scripts Folder
 
 ```powershell
-cd "C:\Users\guillima\OneDrive - Microsoft\Documents\Microsoft\Scripts\AzureFileInventoryScanner\Scripts"
+cd "<path-to-repo>\Scripts\LogExport"
 ```
 
 ### Step 3: Connect to Azure (if not already connected)
@@ -82,32 +82,32 @@ Get-AzOperationalInsightsWorkspace | Select-Object Name, CustomerId
 
 #### Basic Export (all records)
 ```powershell
-.\Export-FileInventoryFromLAW.ps1 -WorkspaceId "37b1bd52-2736-4e21-b2b5-24edf938d9f7"
+.\Export-FileInventoryFromLAW.ps1 -WorkspaceId "<your-workspace-id>"
 ```
 
 #### Export to a Specific Folder
 ```powershell
-.\Export-FileInventoryFromLAW.ps1 -WorkspaceId "37b1bd52-2736-4e21-b2b5-24edf938d9f7" -OutputPath "C:\temp\exports"
+.\Export-FileInventoryFromLAW.ps1 -WorkspaceId "<your-workspace-id>" -OutputPath "C:\temp\exports"
 ```
 
 #### Export with Date Filter
 ```powershell
-.\Export-FileInventoryFromLAW.ps1 -WorkspaceId "37b1bd52-2736-4e21-b2b5-24edf938d9f7" -StartDate "2026-02-01" -EndDate "2026-02-12"
+.\Export-FileInventoryFromLAW.ps1 -WorkspaceId "<your-workspace-id>" -StartDate "2026-02-01" -EndDate "2026-02-12"
 ```
 
 #### Export and Combine into Single File
 ```powershell
-.\Export-FileInventoryFromLAW.ps1 -WorkspaceId "37b1bd52-2736-4e21-b2b5-24edf938d9f7" -OutputPath "C:\temp\exports" -CombineFiles
+.\Export-FileInventoryFromLAW.ps1 -WorkspaceId "<your-workspace-id>" -OutputPath "C:\temp\exports" -CombineFiles
 ```
 
 #### Export with Smaller Batch Size (for large files or timeout issues)
 ```powershell
-.\Export-FileInventoryFromLAW.ps1 -WorkspaceId "37b1bd52-2736-4e21-b2b5-24edf938d9f7" -BatchSize 50000
+.\Export-FileInventoryFromLAW.ps1 -WorkspaceId "<your-workspace-id>" -BatchSize 50000
 ```
 
 #### Export Specific Storage Account
 ```powershell
-.\Export-FileInventoryFromLAW.ps1 -WorkspaceId "37b1bd52-2736-4e21-b2b5-24edf938d9f7" -StorageAccountFilter "mystorageaccount"
+.\Export-FileInventoryFromLAW.ps1 -WorkspaceId "<your-workspace-id>" -StorageAccountFilter "mystorageaccount"
 ```
 
 ### Step 6: Monitor Progress
@@ -178,7 +178,7 @@ The script uses row-based pagination. If a batch fails, it will continue with th
 
 ```powershell
 # 1. Navigate to scripts folder
-cd "C:\Users\guillima\OneDrive - Microsoft\Documents\Microsoft\Scripts\AzureFileInventoryScanner\Scripts"
+cd "<path-to-repo>\Scripts\LogExport"
 
 # 2. Connect to Azure
 Connect-AzAccount
@@ -188,7 +188,7 @@ New-Item -ItemType Directory -Path "C:\temp\exports" -Force
 
 # 4. Run export
 .\Export-FileInventoryFromLAW.ps1 `
-    -WorkspaceId "37b1bd52-2736-4e21-b2b5-24edf938d9f7" `
+    -WorkspaceId "<your-workspace-id>" `
     -OutputPath "C:\temp\exports" `
     -CombineFiles
 
