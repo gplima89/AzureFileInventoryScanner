@@ -116,13 +116,14 @@ function Get-FileShareMetricsFromLAW {
     $endStr = $EndTime.ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
     
     # Query for transaction metrics per file share from StorageFileLogs
+    # Uri format: https://account.file.core.windows.net:443/filesharename/path
     $query = @"
 StorageFileLogs
 | where TimeGenerated >= datetime($startStr) and TimeGenerated <= datetime($endStr)
-| where AccountName == '$StorageAccountName'
-$(if ($FileShareName) { "| where ObjectKey contains '/$FileShareName/'" } else { "" })
-| extend FileShare = extract(@'/file/([^/]+)/', 1, ObjectKey)
+| where AccountName =~ '$StorageAccountName'
+| extend FileShare = extract("file\\.core\\.windows\\.net(:\\d+)?/([^/?]+)", 2, Uri)
 | where isnotempty(FileShare)
+$(if ($FileShareName) { "| where FileShare =~ '$FileShareName'" } else { "" })
 | summarize 
     TotalTransactions = count(),
     ReadTransactions = countif(Category == 'StorageRead'),
@@ -133,8 +134,6 @@ $(if ($FileShareName) { "| where ObjectKey contains '/$FileShareName/'" } else {
     TotalBytesWritten = sum(RequestBodySize),
     AvgLatencyMs = avg(DurationMs),
     MaxLatencyMs = max(DurationMs),
-    SuccessfulOps = countif(StatusCode >= 200 and StatusCode < 300),
-    FailedOps = countif(StatusCode >= 400),
     UniqueCallerIPs = dcount(CallerIpAddress),
     UniqueOperations = dcount(OperationName)
     by FileShare
@@ -143,7 +142,8 @@ $(if ($FileShareName) { "| where ObjectKey contains '/$FileShareName/'" } else {
     
     try {
         $result = Invoke-AzOperationalInsightsQuery -WorkspaceId $WorkspaceId -Query $query -Wait $TimeoutSeconds -ErrorAction Stop
-        return $result.Results
+        # Convert to array to avoid lazy enumerable issues
+        return @($result.Results)
     }
     catch {
         Write-Warning "Failed to query LAW for metrics: $($_.Exception.Message)"
@@ -172,8 +172,9 @@ function Get-FileShareOperationBreakdownFromLAW {
     $query = @"
 StorageFileLogs
 | where TimeGenerated >= datetime($startStr) and TimeGenerated <= datetime($endStr)
-| where AccountName == '$StorageAccountName'
-| where ObjectKey contains '/$FileShareName/'
+| where AccountName =~ '$StorageAccountName'
+| extend FileShare = extract("file\\.core\\.windows\\.net(:\\d+)?/([^/?]+)", 2, Uri)
+| where FileShare =~ '$FileShareName'
 | summarize Count = count() by OperationName, Category
 | order by Count desc
 | take 20
@@ -181,7 +182,7 @@ StorageFileLogs
     
     try {
         $result = Invoke-AzOperationalInsightsQuery -WorkspaceId $WorkspaceId -Query $query -Wait $TimeoutSeconds -ErrorAction Stop
-        return $result.Results
+        return @($result.Results)
     }
     catch {
         return $null
@@ -209,15 +210,16 @@ function Get-FileShareHourlyPatternFromLAW {
     $query = @"
 StorageFileLogs
 | where TimeGenerated >= datetime($startStr) and TimeGenerated <= datetime($endStr)
-| where AccountName == '$StorageAccountName'
-| where ObjectKey contains '/$FileShareName/'
+| where AccountName =~ '$StorageAccountName'
+| extend FileShare = extract("file\\.core\\.windows\\.net(:\\d+)?/([^/?]+)", 2, Uri)
+| where FileShare =~ '$FileShareName'
 | summarize Transactions = count() by bin(TimeGenerated, 1h)
 | order by TimeGenerated asc
 "@
     
     try {
         $result = Invoke-AzOperationalInsightsQuery -WorkspaceId $WorkspaceId -Query $query -Wait $TimeoutSeconds -ErrorAction Stop
-        return $result.Results
+        return @($result.Results)
     }
     catch {
         return $null
