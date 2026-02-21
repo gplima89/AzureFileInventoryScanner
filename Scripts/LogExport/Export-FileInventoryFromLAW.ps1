@@ -4,8 +4,9 @@
 
 .DESCRIPTION
     This script exports data from the FileInventory_CL table in Log Analytics Workspace
-    in batches to overcome the 64MB export limit. It uses row-based pagination to ensure
-    all records can be exported regardless of the total data size.
+    in batches to overcome the 64MB export limit. It uses cursor-based pagination
+    (advancing by TimeGenerated) to efficiently export all records regardless of the
+    total data size, without the 500K row limitation of row_number() approaches.
 
     The script will:
     1. Query the total record count
@@ -233,11 +234,12 @@ $OutputPath = Resolve-Path $OutputPath
 # Build the where clause based on filters
 $whereClause = Build-WhereClause -StartDate $StartDate -EndDate $EndDate -StorageAccountFilter $StorageAccountFilter -FileShareFilter $FileShareFilter
 
-# Get total record count
+# Get total record count (excluding empty rows)
 Write-ProgressMessage "Querying total record count..." -Status "Info"
 $countQuery = @"
 FileInventory_CL
 $whereClause
+| where isnotempty(FilePath)
 | count
 "@
 
@@ -257,32 +259,39 @@ if ($totalRecords -eq 0) {
     return
 }
 
-# Calculate number of batches
-$totalBatches = [math]::Ceiling($totalRecords / $BatchSize)
-Write-ProgressMessage "Will export in $totalBatches batches of $($BatchSize.ToString('N0')) records each" -Status "Info"
+# Estimate number of batches for progress display
+$estimatedBatches = [math]::Ceiling($totalRecords / $BatchSize)
+Write-ProgressMessage "Estimated batches: ~$estimatedBatches (batch size: $($BatchSize.ToString('N0')) records)" -Status "Info"
 Write-ProgressMessage ""
 
-# Export data in batches
+# Export data using cursor-based pagination (advances by TimeGenerated)
+# This avoids the 500K row limitation of serialize/row_number() in KQL
 $exportedFiles = [System.Collections.Generic.List[string]]::new()
 $totalExported = [long]0
 $startTime = Get-Date
+$batchNumber = 0
+$cursorTimestamp = $null
+$consecutiveErrors = 0
 
-for ($batch = 0; $batch -lt $totalBatches; $batch++) {
-    $skip = $batch * $BatchSize
-    $batchNumber = $batch + 1
+while ($true) {
+    $batchNumber++
     
-    Write-ProgressMessage "Processing batch $batchNumber of $totalBatches (records $($skip.ToString('N0')) to $(([math]::Min($skip + $BatchSize, $totalRecords)).ToString('N0')))..." -Status "Info"
+    # Build cursor clause to advance past the last exported timestamp
+    $cursorClause = ""
+    if ($null -ne $cursorTimestamp) {
+        $cursorClause = "| where TimeGenerated > datetime($cursorTimestamp)"
+    }
     
-    # Build the query with pagination
-    # Using serialize with row_number() for reliable pagination
+    Write-ProgressMessage "Processing batch $batchNumber (exported $($totalExported.ToString('N0')) of ~$($totalRecords.ToString('N0')) so far)..." -Status "Info"
+    
+    # Cursor-based query: filter empty rows, order by time, take batch
     $query = @"
 FileInventory_CL
 $whereClause
-| order by TimeGenerated asc, FilePath asc
-| serialize
-| extend RowNum = row_number()
-| where RowNum > $skip and RowNum <= $($skip + $BatchSize)
-| project-away RowNum
+| where isnotempty(FilePath)
+$cursorClause
+| order by TimeGenerated asc
+| take $BatchSize
 "@
     
     try {
@@ -298,42 +307,57 @@ $whereClause
         $resultsArray = @($resultData)
         $recordCount = $resultsArray.Length
         
-        if ($recordCount -gt 0) {
-            $totalExported = $totalExported + $recordCount
-            
-            # Generate filename for this batch
-            $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
-            $batchFileName = "${OutputFileName}_batch${batchNumber}_${timestamp}.csv"
-            $batchFilePath = Join-Path $OutputPath $batchFileName
-            
-            # Export to CSV
-            $resultsArray | Export-Csv -Path $batchFilePath -NoTypeInformation -Encoding UTF8
-            $exportedFiles.Add($batchFilePath)
-            
-            # Calculate progress and ETA
-            $percentComplete = [math]::Round(($totalExported / $totalRecords) * 100, 1)
-            $elapsedTime = (Get-Date) - $startTime
-            $recordsPerSecond = if ($elapsedTime.TotalSeconds -gt 0) { $totalExported / $elapsedTime.TotalSeconds } else { 0 }
-            $remainingRecords = $totalRecords - $totalExported
-            $etaSeconds = if ($recordsPerSecond -gt 0) { $remainingRecords / $recordsPerSecond } else { 0 }
-            $eta = [TimeSpan]::FromSeconds($etaSeconds)
-            
-            Write-ProgressMessage "  Exported $($recordCount.ToString('N0')) records to: $batchFileName" -Status "Success"
-            Write-ProgressMessage "  Progress: $percentComplete% | Total exported: $($totalExported.ToString('N0')) | ETA: $($eta.ToString('hh\:mm\:ss'))" -Status "Info"
+        if ($recordCount -eq 0) {
+            Write-ProgressMessage "  No more records to export - done" -Status "Success"
+            break
         }
-        else {
-            Write-ProgressMessage "  No records returned in this batch (may have reached end of data)" -Status "Warning"
+        
+        $consecutiveErrors = 0
+        $totalExported = $totalExported + $recordCount
+        
+        # Update cursor to the timestamp of the last row in this batch
+        $cursorTimestamp = $resultsArray[-1].TimeGenerated
+        
+        # Generate filename for this batch
+        $fileTimestamp = Get-Date -Format "yyyyMMdd_HHmmss"
+        $batchFileName = "${OutputFileName}_batch${batchNumber}_${fileTimestamp}.csv"
+        $batchFilePath = Join-Path $OutputPath $batchFileName
+        
+        # Export to CSV
+        $resultsArray | Export-Csv -Path $batchFilePath -NoTypeInformation -Encoding UTF8
+        $exportedFiles.Add($batchFilePath)
+        
+        # Calculate progress and ETA
+        $percentComplete = [math]::Round(($totalExported / [math]::Max($totalRecords, $totalExported)) * 100, 1)
+        $elapsedTime = (Get-Date) - $startTime
+        $recordsPerSecond = if ($elapsedTime.TotalSeconds -gt 0) { $totalExported / $elapsedTime.TotalSeconds } else { 0 }
+        $remainingRecords = [math]::Max(0, $totalRecords - $totalExported)
+        $etaSeconds = if ($recordsPerSecond -gt 0) { $remainingRecords / $recordsPerSecond } else { 0 }
+        $eta = [TimeSpan]::FromSeconds($etaSeconds)
+        
+        Write-ProgressMessage "  Exported $($recordCount.ToString('N0')) records to: $batchFileName" -Status "Success"
+        Write-ProgressMessage "  Progress: $percentComplete% | Total exported: $($totalExported.ToString('N0')) | ETA: $($eta.ToString('hh\:mm\:ss'))" -Status "Info"
+        
+        # Warn if API returned fewer rows than requested (response size limit truncation)
+        if ($recordCount -lt $BatchSize) {
+            if ($totalExported -lt $totalRecords) {
+                Write-ProgressMessage "  Note: API returned $($recordCount.ToString('N0')) of $($BatchSize.ToString('N0')) requested (response size limit). Continuing from cursor..." -Status "Warning"
+            }
         }
     }
     catch {
+        $consecutiveErrors++
         Write-ProgressMessage "  Failed to export batch $batchNumber : $($_.Exception.Message)" -Status "Error"
-        Write-ProgressMessage "  Continuing with next batch..." -Status "Warning"
+        
+        if ($consecutiveErrors -ge 3) {
+            Write-ProgressMessage "  3 consecutive failures - stopping export" -Status "Error"
+            break
+        }
+        Write-ProgressMessage "  Will retry next batch..." -Status "Warning"
     }
     
     # Small delay between batches to avoid throttling
-    if ($batch -lt ($totalBatches - 1)) {
-        Start-Sleep -Milliseconds 500
-    }
+    Start-Sleep -Milliseconds 500
 }
 
 Write-ProgressMessage "" -Status "Info"
