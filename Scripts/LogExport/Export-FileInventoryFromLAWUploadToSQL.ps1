@@ -307,8 +307,14 @@ function Get-SqlConnection {
         # Azure AD token-based authentication
         $connectionStringBuilder["Encrypt"] = $true
         $connection.ConnectionString = $connectionStringBuilder.ConnectionString
-        $tokenResponse = Get-AzAccessToken -ResourceUrl "https://database.windows.net/" -ErrorAction Stop
-        $connection.AccessToken = $tokenResponse.Token
+        $tokenResponse = Get-AzAccessToken -ResourceUrl "https://database.windows.net/" -ErrorAction Stop -WarningAction SilentlyContinue
+        # Handle both string and SecureString token formats (Az.Accounts 5.x+ returns SecureString)
+        if ($tokenResponse.Token -is [securestring]) {
+            $connection.AccessToken = (New-Object System.Net.NetworkCredential("", $tokenResponse.Token)).Password
+        }
+        else {
+            $connection.AccessToken = $tokenResponse.Token
+        }
     }
 
     return $connection
@@ -408,17 +414,142 @@ Write-ProgressMessage "Connected as: $($context.Account.Id)" -Status "Success"
 $authMethod = if ($UseSqlAuth) { "SQL Authentication" } else { "Azure AD (token-based)" }
 Write-ProgressMessage "Connecting to SQL MI: ${SqlServer},${SqlPort} / $SqlDatabase (auth: $authMethod)..." -Status "Info"
 try {
-    $sqlConnection = Get-SqlConnection -Server $SqlServer -Port $SqlPort -Database $SqlDatabase `
-        -UseSqlAuth $UseSqlAuth.IsPresent -Username $SqlUsername -Password $SqlPassword
+    $connectionStringBuilder = New-Object System.Data.SqlClient.SqlConnectionStringBuilder
+    $connectionStringBuilder["Data Source"] = "${SqlServer},${SqlPort}"
+    $connectionStringBuilder["Initial Catalog"] = $SqlDatabase
+    $connectionStringBuilder["TrustServerCertificate"] = $true
+    $connectionStringBuilder["Connect Timeout"] = 30
+
+    $sqlConnection = New-Object System.Data.SqlClient.SqlConnection
+
+    if ($UseSqlAuth) {
+        $connectionStringBuilder["User ID"] = $SqlUsername
+        $credential = New-Object System.Net.NetworkCredential("", $SqlPassword)
+        $connectionStringBuilder["Password"] = $credential.Password
+        $sqlConnection.ConnectionString = $connectionStringBuilder.ConnectionString
+    }
+    else {
+        $connectionStringBuilder["Encrypt"] = $true
+        $sqlConnection.ConnectionString = $connectionStringBuilder.ConnectionString
+        $tokenResponse = Get-AzAccessToken -ResourceUrl "https://database.windows.net/" -ErrorAction Stop -WarningAction SilentlyContinue
+        if ($tokenResponse.Token -is [securestring]) {
+            $sqlConnection.AccessToken = (New-Object System.Net.NetworkCredential("", $tokenResponse.Token)).Password
+        }
+        else {
+            $sqlConnection.AccessToken = $tokenResponse.Token
+        }
+    }
+
     $sqlConnection.Open()
     Write-ProgressMessage "SQL MI connection established" -Status "Success"
 }
 catch {
     Write-ProgressMessage "Failed to connect to SQL MI: $($_.Exception.Message)" -Status "Error"
+    Write-ProgressMessage "" -Status "Info"
+    Write-ProgressMessage "Troubleshooting tips:" -Status "Warning"
+    Write-ProgressMessage "  1. Verify the server FQDN includes '.public.' for public endpoint (e.g., myinstance.public.xxxxx.database.windows.net)" -Status "Warning"
+    Write-ProgressMessage "  2. Ensure port $SqlPort is correct (3342 for public endpoint, 1433 for private)" -Status "Warning"
+    Write-ProgressMessage "  3. Check that the database '$SqlDatabase' exists on the SQL MI" -Status "Warning"
+    if (-not $UseSqlAuth) {
+        Write-ProgressMessage "  4. Confirm your Azure AD account ($($context.Account.Id)) has access to the SQL MI" -Status "Warning"
+        Write-ProgressMessage "  5. If SQL MI has 'Azure AD only' auth enabled, do not use -UseSqlAuth" -Status "Warning"
+    }
+    else {
+        Write-ProgressMessage "  4. Verify SQL username and password are correct" -Status "Warning"
+        Write-ProgressMessage "  5. If SQL MI has 'Azure AD only' auth enabled, remove -UseSqlAuth and use Azure AD auth instead" -Status "Warning"
+    }
+    Write-ProgressMessage "  6. Test connectivity: Test-NetConnection -ComputerName $SqlServer -Port $SqlPort" -Status "Warning"
     throw
 }
 
+#region Pre-flight Validation: Connection Test & Table Check
+
 $fullTableName = "[$SqlSchema].[$SqlTable]"
+
+# Step 1: Test SQL connection with a simple query
+Write-ProgressMessage "Running pre-flight connection test..." -Status "Info"
+try {
+    $testCmd = $sqlConnection.CreateCommand()
+    $testCmd.CommandText = "SELECT 1 AS ConnectionTest"
+    $testCmd.CommandTimeout = 15
+    $testResult = $testCmd.ExecuteScalar()
+    $testCmd.Dispose()
+    if ($testResult -eq 1) {
+        Write-ProgressMessage "  Connection test passed (SELECT 1 = OK)" -Status "Success"
+    }
+    else {
+        Write-ProgressMessage "  Connection test returned unexpected result: $testResult" -Status "Warning"
+    }
+}
+catch {
+    Write-ProgressMessage "  Connection test FAILED: $($_.Exception.Message)" -Status "Error"
+    Write-ProgressMessage "  The connection was opened but cannot execute queries. Check permissions." -Status "Error"
+    if ($sqlConnection.State -eq 'Open') { $sqlConnection.Close() }
+    $sqlConnection.Dispose()
+    throw "Pre-flight connection test failed: $($_.Exception.Message)"
+}
+
+# Step 2: Verify connected to the correct database
+try {
+    $dbCmd = $sqlConnection.CreateCommand()
+    $dbCmd.CommandText = "SELECT DB_NAME() AS CurrentDatabase"
+    $dbCmd.CommandTimeout = 15
+    $currentDb = $dbCmd.ExecuteScalar()
+    $dbCmd.Dispose()
+    if ($currentDb -eq $SqlDatabase) {
+        Write-ProgressMessage "  Database verified: $currentDb" -Status "Success"
+    }
+    else {
+        Write-ProgressMessage "  WARNING: Connected to '$currentDb' instead of '$SqlDatabase'" -Status "Warning"
+    }
+}
+catch {
+    Write-ProgressMessage "  Could not verify database name: $($_.Exception.Message)" -Status "Warning"
+}
+
+# Step 3: Check if target table already exists
+Write-ProgressMessage "Checking if target table $fullTableName exists..." -Status "Info"
+try {
+    $tableCheckCmd = $sqlConnection.CreateCommand()
+    $tableCheckCmd.CommandText = @"
+SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES 
+WHERE TABLE_SCHEMA = '$SqlSchema' AND TABLE_NAME = '$SqlTable'
+"@
+    $tableCheckCmd.CommandTimeout = 15
+    $tableExists = [int]$tableCheckCmd.ExecuteScalar() -gt 0
+    $tableCheckCmd.Dispose()
+
+    if ($tableExists) {
+        Write-ProgressMessage "  Table $fullTableName exists" -Status "Success"
+
+        # Get current row count for reference
+        $countCmd = $sqlConnection.CreateCommand()
+        $countCmd.CommandText = "SELECT COUNT(*) FROM $fullTableName"
+        $countCmd.CommandTimeout = 30
+        $existingRows = [long]$countCmd.ExecuteScalar()
+        $countCmd.Dispose()
+        Write-ProgressMessage "  Current row count: $($existingRows.ToString('N0'))" -Status "Info"
+
+        if ($TruncateTable) {
+            Write-ProgressMessage "  Table will be truncated before upload (-TruncateTable specified)" -Status "Warning"
+        }
+        else {
+            Write-ProgressMessage "  New data will be appended to existing rows (use -TruncateTable to clear first)" -Status "Info"
+        }
+    }
+    else {
+        Write-ProgressMessage "  Table $fullTableName does not exist - it will be auto-created from the first batch" -Status "Info"
+    }
+}
+catch {
+    Write-ProgressMessage "  Could not check table existence: $($_.Exception.Message)" -Status "Warning"
+    Write-ProgressMessage "  The script will attempt to create the table if needed during export" -Status "Info"
+}
+
+Write-ProgressMessage "Pre-flight validation completed" -Status "Success"
+Write-ProgressMessage "" -Status "Info"
+
+#endregion
 
 # Build the where clause based on filters
 $whereClause = Build-WhereClause -StartDate $StartDate -EndDate $EndDate -StorageAccountFilter $StorageAccountFilter -FileShareFilter $FileShareFilter
