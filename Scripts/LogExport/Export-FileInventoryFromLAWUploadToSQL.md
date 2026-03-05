@@ -2,7 +2,7 @@
 
 ## Overview
 
-The `Export-FileInventoryFromLAWUploadToSQL.ps1` script exports file inventory data from an Azure Log Analytics Workspace and uploads it directly to an Azure SQL Managed Instance database. It overcomes the 64MB export limit in the Azure Portal by using batch-based cursor pagination, allowing you to export and upload millions of records efficiently using `SqlBulkCopy`.
+The `Export-FileInventoryFromLAWUploadToSQL.ps1` script exports data from a Log Analytics Workspace table (default: `FileInventory_CL`) and uploads it directly to an Azure SQL Managed Instance database. It overcomes the 64MB export limit in the Azure Portal by using batch-based cursor pagination, allowing you to export and upload millions of records efficiently using `SqlBulkCopy`.
 
 ## Features
 
@@ -57,6 +57,7 @@ The script uses `System.Data.SqlClient` which is included with .NET Framework on
 | Parameter | Required | Default | Description |
 |-----------|----------|---------|-------------|
 | `WorkspaceId` | **Yes** | — | Log Analytics Workspace ID (GUID) |
+| `LAWTableName` | No | `FileInventory_CL` | Name of the table in Log Analytics to query |
 | `SqlServer` | **Yes** | — | SQL MI server FQDN (e.g., `myinstance.public.xxxxx.database.windows.net`) |
 | `SqlDatabase` | **Yes** | — | Target database name |
 | `SqlTable` | No | `FileInventory` | Target table name |
@@ -157,6 +158,15 @@ In the Azure Portal:
     -SqlServer "myinstance.public.xxxxx.database.windows.net" `
     -SqlDatabase "FileInventoryDB" `
     -TruncateTable
+```
+
+#### Upload from a Custom LAW Table
+```powershell
+.\Export-FileInventoryFromLAWUploadToSQL.ps1 `
+    -WorkspaceId "<your-workspace-id>" `
+    -LAWTableName "MyCustomTable_CL" `
+    -SqlServer "myinstance.public.xxxxx.database.windows.net" `
+    -SqlDatabase "FileInventoryDB"
 ```
 
 #### Upload with Custom Table Name and Schema

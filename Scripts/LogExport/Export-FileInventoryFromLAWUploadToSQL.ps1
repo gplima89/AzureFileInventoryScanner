@@ -3,7 +3,7 @@
     Exports all file inventory data from Log Analytics Workspace to Azure SQL Managed Instance.
 
 .DESCRIPTION
-    This script exports data from the FileInventory_CL table in Log Analytics Workspace
+    This script exports data from a specified table (default: FileInventory_CL) in Log Analytics Workspace
     in batches and uploads each batch to a SQL MI database using SqlBulkCopy. It uses
     cursor-based pagination (advancing by TimeGenerated) to efficiently export all records
     regardless of the total data size, without the 500K row limitation of row_number() approaches.
@@ -18,6 +18,9 @@
 
 .PARAMETER WorkspaceId
     The Log Analytics Workspace ID (GUID).
+
+.PARAMETER LAWTableName
+    The name of the table in Log Analytics to query. Default is "FileInventory_CL".
 
 .PARAMETER SqlServer
     The SQL Managed Instance server name (e.g., myinstance.public.xxxxx.database.windows.net).
@@ -107,6 +110,9 @@
 param(
     [Parameter(Mandatory = $true)]
     [string]$WorkspaceId,
+
+    [Parameter(Mandatory = $false)]
+    [string]$LAWTableName = "FileInventory_CL",
 
     [Parameter(Mandatory = $true)]
     [string]$SqlServer,
@@ -420,7 +426,7 @@ $whereClause = Build-WhereClause -StartDate $StartDate -EndDate $EndDate -Storag
 # Get total record count (excluding empty rows)
 Write-ProgressMessage "Querying total record count..." -Status "Info"
 $countQuery = @"
-FileInventory_CL
+$LAWTableName
 $whereClause
 | where isnotempty(FilePath)
 | count
@@ -471,7 +477,7 @@ while ($true) {
     
     # Cursor-based query: filter empty rows, order by time, take batch
     $query = @"
-FileInventory_CL
+$LAWTableName
 $whereClause
 | where isnotempty(FilePath)
 $cursorClause
