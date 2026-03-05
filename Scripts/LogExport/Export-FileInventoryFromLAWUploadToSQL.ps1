@@ -72,6 +72,13 @@
 .PARAMETER FileShareFilter
     Optional. Filter by specific file share name.
 
+.PARAMETER SqlTenantId
+    Optional. The Azure AD (Entra ID) Tenant ID where the SQL MI is located.
+    Required for cross-tenant scenarios where the LAW and SQL MI are in different tenants.
+    When specified, the script will request an Azure AD token scoped to this tenant for SQL MI auth,
+    while using the current tenant context for LAW queries.
+    Your account must be a guest user in the SQL MI tenant or have cross-tenant access.
+
 .PARAMETER QueryTimeoutSeconds
     Timeout in seconds for each LAW query batch. Default is 600 (10 minutes).
 
@@ -100,6 +107,15 @@
         -SqlServer "myinstance.xxxxx.database.windows.net" -SqlPort 1433 `
         -SqlDatabase "FileInventoryDB" -TruncateTable `
         -StartDate "2026-02-01" -EndDate "2026-02-12"
+
+.EXAMPLE
+    # Cross-tenant: LAW in Tenant A, SQL MI in Tenant B
+    # Connect to Tenant A first (Connect-AzAccount -TenantId <TenantA>), then:
+    .\Export-FileInventoryFromLAWUploadToSQL.ps1 -WorkspaceId "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" `
+        -SqlServer "myinstance.public.xxxxx.database.windows.net" `
+        -SqlDatabase "FileInventoryDB" `
+        -SqlTenantId "yyyyyyyy-yyyy-yyyy-yyyy-yyyyyyyyyyyy" `
+        -TruncateTable
 
 .NOTES
     Author: Azure File Inventory Team
@@ -161,6 +177,9 @@ param(
 
     [Parameter(Mandatory = $false)]
     [string]$FileShareFilter,
+
+    [Parameter(Mandatory = $false)]
+    [string]$SqlTenantId,
 
     [Parameter(Mandatory = $false)]
     [int]$QueryTimeoutSeconds = 600
@@ -307,7 +326,9 @@ function Get-SqlConnection {
         # Azure AD token-based authentication
         $connectionStringBuilder["Encrypt"] = $true
         $connection.ConnectionString = $connectionStringBuilder.ConnectionString
-        $tokenResponse = Get-AzAccessToken -ResourceUrl "https://database.windows.net/" -ErrorAction Stop -WarningAction SilentlyContinue
+        $tokenParams = @{ ResourceUrl = "https://database.windows.net/"; ErrorAction = "Stop"; WarningAction = "SilentlyContinue" }
+        if (-not [string]::IsNullOrEmpty($SqlTenantId)) { $tokenParams["TenantId"] = $SqlTenantId }
+        $tokenResponse = Get-AzAccessToken @tokenParams
         # Handle both string and SecureString token formats (Az.Accounts 5.x+ returns SecureString)
         if ($tokenResponse.Token -is [securestring]) {
             $connection.AccessToken = (New-Object System.Net.NetworkCredential("", $tokenResponse.Token)).Password
@@ -409,6 +430,10 @@ if (-not $context) {
     throw "Not connected to Azure"
 }
 Write-ProgressMessage "Connected as: $($context.Account.Id)" -Status "Success"
+Write-ProgressMessage "Current tenant: $($context.Tenant.Id)" -Status "Info"
+if (-not [string]::IsNullOrEmpty($SqlTenantId)) {
+    Write-ProgressMessage "Cross-tenant mode: SQL MI token will be requested for tenant $SqlTenantId" -Status "Warning"
+}
 
 # Connect to SQL MI
 $authMethod = if ($UseSqlAuth) { "SQL Authentication" } else { "Azure AD (token-based)" }
@@ -431,7 +456,9 @@ try {
     else {
         $connectionStringBuilder["Encrypt"] = $true
         $sqlConnection.ConnectionString = $connectionStringBuilder.ConnectionString
-        $tokenResponse = Get-AzAccessToken -ResourceUrl "https://database.windows.net/" -ErrorAction Stop -WarningAction SilentlyContinue
+        $sqlTokenParams = @{ ResourceUrl = "https://database.windows.net/"; ErrorAction = "Stop"; WarningAction = "SilentlyContinue" }
+        if (-not [string]::IsNullOrEmpty($SqlTenantId)) { $sqlTokenParams["TenantId"] = $SqlTenantId }
+        $tokenResponse = Get-AzAccessToken @sqlTokenParams
         if ($tokenResponse.Token -is [securestring]) {
             $sqlConnection.AccessToken = (New-Object System.Net.NetworkCredential("", $tokenResponse.Token)).Password
         }

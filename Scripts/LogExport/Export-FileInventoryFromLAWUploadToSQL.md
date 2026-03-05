@@ -10,6 +10,8 @@ The `Export-FileInventoryFromLAWUploadToSQL.ps1` script exports data from a Log 
 - **SQL Bulk Upload**: Uses `System.Data.SqlClient.SqlBulkCopy` for high-performance inserts
 - **Auto Table Creation**: Automatically creates the target SQL table if it doesn't exist
 - **Dual Authentication**: Supports Azure AD (token-based) and SQL Authentication
+- **Cross-Tenant Support**: Export from a LAW in one tenant and upload to a SQL MI in another tenant using `-SqlTenantId`
+- **Pre-flight Validation**: Tests SQL connectivity, verifies the database, and checks table existence before starting the export
 - **Truncate Option**: Optionally truncate the target table before uploading
 - **Progress Tracking**: Displays real-time progress with ETA
 - **Retry Logic**: Automatically retries failed LAW queries with exponential backoff
@@ -74,6 +76,7 @@ The script uses `System.Data.SqlClient` which is included with .NET Framework on
 | `EndDate` | No | — | Filter by end date (e.g., `"2026-02-12"`) |
 | `StorageAccountFilter` | No | — | Filter by storage account name |
 | `FileShareFilter` | No | — | Filter by file share name |
+| `SqlTenantId` | No | — | Azure AD Tenant ID where SQL MI is located (for cross-tenant scenarios) |
 | `QueryTimeoutSeconds` | No | `600` | LAW query timeout in seconds |
 
 ## Authentication Methods
@@ -99,6 +102,32 @@ Uses traditional SQL login credentials. Pass the username as a string and the pa
 
 ```powershell
 -UseSqlAuth -SqlUsername "myuser" -SqlPassword (ConvertTo-SecureString "mypassword" -AsPlainText -Force)
+```
+
+### Cross-Tenant Azure AD (`-SqlTenantId`)
+
+When the Log Analytics Workspace and SQL MI are in **different Azure AD tenants**, the script needs to request a token scoped to the SQL MI's tenant. Use the `-SqlTenantId` parameter with the tenant ID where the SQL MI resides.
+
+**How it works**:
+1. You connect to Azure in the **LAW tenant** (`Connect-AzAccount -TenantId <LAW-tenant>`)
+2. LAW queries use the current tenant context automatically
+3. The script requests a separate Azure AD token for `https://database.windows.net/` scoped to the **SQL MI tenant** via `-SqlTenantId`
+
+**Requirements**:
+- Your Azure AD account must have access in **both tenants** (e.g., guest user in the SQL MI tenant)
+- The SQL MI must have your identity configured as a database user (see Azure AD section above)
+
+```powershell
+# Connect to the LAW tenant first
+Connect-AzAccount -TenantId "<law-tenant-id>"
+
+# Run with cross-tenant support
+.\Export-FileInventoryFromLAWUploadToSQL.ps1 `
+    -WorkspaceId "<workspace-id>" `
+    -SqlServer "myinstance.public.xxxxx.database.windows.net" `
+    -SqlDatabase "FileInventoryDB" `
+    -SqlTenantId "<sql-mi-tenant-id>" `
+    -TruncateTable
 ```
 
 ## Step-by-Step Execution
@@ -220,16 +249,40 @@ In the Azure Portal:
     -BatchSize 50000
 ```
 
+#### Cross-Tenant Upload (LAW in Tenant A, SQL MI in Tenant B)
+```powershell
+# First connect to the tenant where the LAW is located
+Connect-AzAccount -TenantId "<law-tenant-id>"
+
+.\Export-FileInventoryFromLAWUploadToSQL.ps1 `
+    -WorkspaceId "<your-workspace-id>" `
+    -SqlServer "myinstance.public.xxxxx.database.windows.net" `
+    -SqlDatabase "FileInventoryDB" `
+    -SqlTenantId "<sql-mi-tenant-id>" `
+    -TruncateTable
+```
+
 ### Step 7: Monitor Progress
 
-The script displays progress information:
+The script displays progress information including pre-flight validation:
 ```
-[2026-02-12 11:30:25] Processing batch 1 (exported 0 of ~27,600,000 so far)...
-[2026-02-12 11:30:30]   Converting 100,000 records to DataTable...
-[2026-02-12 11:30:32]   Table [dbo].[FileInventory] verified/created
-[2026-02-12 11:30:33]   Uploading batch to SQL MI...
-[2026-02-12 11:30:50]   Uploaded 100,000 records to SQL MI
-[2026-02-12 11:30:50]   Progress: 0.4% | Total uploaded: 100,000 | ETA: 01:55:31
+[2026-03-05 11:07:18] Verifying Azure connection...
+[2026-03-05 11:07:18] Connected as: user@domain.com
+[2026-03-05 11:07:18] Current tenant: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+[2026-03-05 11:07:18] Connecting to SQL MI: myinstance.public.xxxxx.database.windows.net,3342 / FileInventoryDB...
+[2026-03-05 11:07:19] SQL MI connection established
+[2026-03-05 11:07:19] Running pre-flight connection test...
+[2026-03-05 11:07:19]   Connection test passed (SELECT 1 = OK)
+[2026-03-05 11:07:19]   Database verified: FileInventoryDB
+[2026-03-05 11:07:19] Checking if target table [dbo].[FileInventory] exists...
+[2026-03-05 11:07:19]   Table [dbo].[FileInventory] exists
+[2026-03-05 11:07:19]   Current row count: 100,000
+[2026-03-05 11:07:19] Pre-flight validation completed
+[2026-03-05 11:07:25] Processing batch 1 (exported 0 of ~27,600,000 so far)...
+[2026-03-05 11:07:30]   Converting 100,000 records to DataTable...
+[2026-03-05 11:07:32]   Uploading batch to SQL MI...
+[2026-03-05 11:07:50]   Uploaded 100,000 records to SQL MI
+[2026-03-05 11:07:50]   Progress: 0.4% | Total uploaded: 100,000 | ETA: 01:55:31
 ```
 
 ## SQL Table Schema
@@ -268,10 +321,19 @@ Run `Connect-AzAccount` before executing the script.
 When using `-UseSqlAuth`, both `-SqlUsername` and `-SqlPassword` must be provided.
 
 ### SQL MI Connection Failures
-- **Public endpoint**: Verify the public endpoint is enabled on the SQL MI and port `3342` is allowed in the NSG/firewall
+- **Public endpoint**: Verify the server FQDN includes `.public.` (e.g., `myinstance.public.xxxxx.database.windows.net`) and port `3342` is allowed in the NSG/firewall
 - **Private endpoint**: Ensure network connectivity (VPN/ExpressRoute/VNet peering) and use `-SqlPort 1433`
 - **Azure AD auth**: Verify the signed-in identity has been added as a user in the SQL MI database
 - **SQL auth**: Verify the login credentials and that the SQL login is mapped to the target database
+- **Database does not exist**: SQL MI returns a misleading `Login failed for user '<token-identified principal>'` error when the target database doesn't exist. Verify the database exists first by connecting to `master`
+- **Azure AD only auth**: If the SQL MI has "Azure Active Directory only authentication" enabled, do not use `-UseSqlAuth`. Remove the switch and use Azure AD auth instead
+- **Test connectivity**: `Test-NetConnection -ComputerName <sqlserver> -Port <port>`
+
+### Cross-Tenant "Login Failed" Errors
+- Ensure you pass `-SqlTenantId` with the tenant ID where the SQL MI is located
+- Without this parameter, the script requests a token for the **current** tenant (where the LAW is), which will be rejected by a SQL MI in a different tenant
+- Verify your account is a guest user in the SQL MI tenant or has cross-tenant access
+- Ensure your identity has been added as a database user in the SQL MI (see Authentication section)
 
 ### LAW Query Timeout Errors
 - Reduce batch size: `-BatchSize 50000`
@@ -305,6 +367,7 @@ The auto-create logic uses `IF NOT EXISTS` — it will not alter an existing tab
 
 ## Example Complete Workflow
 
+### Same-Tenant Workflow
 ```powershell
 # 1. Navigate to scripts folder
 cd "<path-to-repo>\Scripts\LogExport"
@@ -318,6 +381,28 @@ Connect-AzAccount
     -SqlServer "myinstance.public.xxxxx.database.windows.net" `
     -SqlDatabase "FileInventoryDB" `
     -SqlTable "FileInventory" `
+    -TruncateTable
+
+# 4. Verify data in SQL MI
+# Connect to the SQL MI database and run:
+#   SELECT COUNT(*) FROM [dbo].[FileInventory]
+#   SELECT TOP 10 * FROM [dbo].[FileInventory]
+```
+
+### Cross-Tenant Workflow
+```powershell
+# 1. Navigate to scripts folder
+cd "<path-to-repo>\Scripts\LogExport"
+
+# 2. Connect to the tenant where the LAW is located
+Connect-AzAccount -TenantId "<law-tenant-id>"
+
+# 3. Run upload with cross-tenant SQL MI target
+.\Export-FileInventoryFromLAWUploadToSQL.ps1 `
+    -WorkspaceId "<your-workspace-id>" `
+    -SqlServer "myinstance.public.xxxxx.database.windows.net" `
+    -SqlDatabase "FileInventoryDB" `
+    -SqlTenantId "<sql-mi-tenant-id>" `
     -TruncateTable
 
 # 4. Verify data in SQL MI
