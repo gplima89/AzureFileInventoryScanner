@@ -56,7 +56,7 @@
     .\Analyze-FileShareTiers.ps1 -StorageAccountName "mystorageaccount" -ResourceGroupName "my-rg" -WorkspaceId "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" -TimeRangeDays 7
 
 .EXAMPLE
-    .\Analyze-FileShareTiers.ps1 -StorageAccountName "mystorageaccount" -ResourceGroupName "my-rg" -FileShareName "myfileshare"
+    .\Analyze-FileShareTiers.ps1 -StorageAccountName "mystorageaccount" -ResourceGroupName "my-rg" -FileShareName "myfileshare" 
 
 .NOTES
     Author: Azure File Storage Lifecycle Team

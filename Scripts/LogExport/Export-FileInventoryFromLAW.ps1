@@ -53,7 +53,7 @@
     .\Export-FileInventoryFromLAW.ps1 -WorkspaceId "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
 
 .EXAMPLE
-    .\Export-FileInventoryFromLAW.ps1 -WorkspaceId "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" -BatchSize 50000 -CombineFiles
+    .\Export-FileInventoryFromLAW.ps1 -WorkspaceId "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" -BatchSize 1200 -CombineFiles
 
 .EXAMPLE
     .\Export-FileInventoryFromLAW.ps1 -WorkspaceId "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" -CombineFiles -RemoveBatchFiles
